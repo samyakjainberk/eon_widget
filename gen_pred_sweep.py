@@ -49,9 +49,13 @@ def captures(arch_filter=None, ds_filter=None):
                 itag = scheme if scale is None else f"default{scale}"
                 iflag = f"--initscheme {scheme}" + ("" if scale is None else f" --init {scale}")
                 name = f"{ds}_{arch}_{loss}_lr{lr}_{itag}_n{nsamp}_s{SEED}"
+                # self-stabilization (ss) is only meaningful for SMOOTH activations — for relu nets ∇S≈0
+                # (sharpness ~piecewise-constant), so the cosines are ~blank while still costing Lanczos+2 HVPs
+                # per eig-tick. Disable ss for relu configs; keep it for tanh (cifar10_mlp / mnist_mlp).
+                ss_off = " --set ss=0" if "--act relu" in aflags else ""
                 cmd = (f"eos_prediction_multiclass.py --dataset {ds} --loss {loss} --arch {arch} "
                        f"--nsamp {nsamp} {dims} {aflags} --lr {lr} {iflag} --steps {steps} "
-                       f"--swpairs {SWPAIRS} --swsteps {SWSTEPS} --seed {SEED} --label {name} "
+                       f"--swpairs {SWPAIRS} --swsteps {SWSTEPS} --seed {SEED} --label {name}{ss_off} "
                        f"--out runs_captured/{name}.json")
                 out.append((name, cmd, est_h))
     return out
