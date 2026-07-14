@@ -227,6 +227,7 @@
   <label title="Prediction 6 — 4 adaptive optimizers (GD / Signed / Muon / Gauss-Newton) from the SAME init; top-40 Gauss-Newton eigenvalue histograms, evolving over training. OFF by default (no momentum, no weight decay)."><input type="checkbox" id="enP6"> ★ Prediction-6 (Adaptive Opt)</label>
   <label title="Early-dynamics stats (NOT a prediction) — σ-weighted Jᵀr projection on ±M_r eigenvectors (top/bottom-50) + the mean principal angle of the H=ΣQ_k and M_r eigenspaces at lags 1/2/5/10. Sits ABOVE the prediction panels. OFF by default (two Lanczos per step)."><input type="checkbox" id="enEDS"> Early-dynamics stats</label>
   <label title="Self-stabilization mechanism (NOT a prediction) — cos(∇sharpness, ±k eigenvectors of the PRECONDITIONED Hessian H_P=P^½∇²L P^½) + two projected-gradient cosines, over training. Works for gd/sign/spectral/gaussnewton: the gradient stays the raw ∇L, only the Hessian is preconditioned (P per optimizer). Sits right above Prediction-1&2. OFF by default (Lanczos + 2 HVPs per eig-tick)."><input type="checkbox" id="enSS" onchange="toggleSS()"> Self-stabilization</label>
+  <label title="Q eigenspectrum (NOT a prediction) — the top⊕bottom-k eigenSPECTRA of the residual-weighted function Hessian Q_r=Σ_k r_kQ_k and the unweighted H=Σ_k Q_k, computed EVERY iteration, shown side-by-side as a scree, with a slider to scrub to any past iteration. For eyeballing the eigenstructure of Q over training. OFF by default (two Lanczos per step)."><input type="checkbox" id="enQspec" onchange="toggleQspec()"> Q eigenspectrum</label>
   <span class="tt" style="margin-left:14px">Base panels (feed the forecasts)</span>
   <label><input type="checkbox" id="en1" checked> 1 · loss / sharpness / residual</label>
   <label><input type="checkbox" id="en2" checked> 2 · eig top-n</label>
@@ -384,6 +385,21 @@
   <div id="p_ss2" class="plot" style="height:300px"></div>
   <div id="p_ss3" class="plot" style="height:300px"></div>
   <div id="p_ss4" class="plot" style="height:300px"></div>
+</div>
+</div>
+
+<div id="sec_qspec" style="border:2px solid #0369a1;border-radius:8px;padding:6px 14px 12px;margin:6px 0 18px;background:#f0f9ff;display:none">
+<h2 style="color:#0369a1;margin-top:4px">Q eigenspectrum — Q_r &amp; ΣQ_i over training</h2>
+<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:2px 0 6px;font-size:13px;color:#374151">
+  <label title="Number of top ⊕ bottom eigenvalues of Q_r / H computed per iteration (via Lanczos). More = finer-grained but slower. Default 40.">±eigs per op&nbsp;<input id="qspeck" value="40" style="width:48px"></label>
+  <span style="margin-left:6px;color:#0369a1;font-weight:600">◀ iteration&nbsp;</span>
+  <input id="qspec_slider" type="range" min="0" max="0" value="0" step="1" style="flex:1;min-width:180px">
+  <span id="qspec_step" style="color:#6b7280;font-size:12px;white-space:nowrap"></span>
+</div>
+<p class="cap"><b>Not a prediction</b> — a fine-grained look at the eigenstructure of the per-sample function Hessians over training. At EVERY iteration we compute the <b>top-$k$ ⊕ bottom-$k$ eigenvalues</b> ($k$ = the <i>±eigs per op</i> control) of the <b>residual-weighted</b> function Hessian $Q_r=\sum_k r_kQ_k$ (<b style="color:#2563eb">left</b>) and the <b>unweighted</b> $H=\sum_k Q_k$ (<b style="color:#0f766e">right</b>) ($Q_k=\nabla^2 f_k$; matrix-free via HVP), and plot them as a <b>scree</b> (x = rank, sorted descending; y = eigenvalue). Drag the <b>slider ▲</b> to scrub back to any earlier iteration and watch the spectrum evolve. Sits above Prediction-1&2; OFF by default (two Lanczos per step).</p>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px">
+  <div id="p_qmr" class="plot" style="height:360px"></div>
+  <div id="p_qh" class="plot" style="height:360px"></div>
 </div>
 </div>
 
@@ -3425,7 +3441,7 @@ function syncSectionVis(multi){
   {const el=document.getElementById('sec_sweep');if(el)el.style.display=chk('enPs')?'':'none';}
   {const el=document.getElementById('sec_pred6');if(el){const vis=chk('enP6');el.style.display=vis?'':'none';
     if(vis)requestAnimationFrame(()=>{for(const id of ['p_p6_sign','p_p6_muon','p_p6_gn','p_p6_loss','p_p6_sharp','p_p6_fl_gd','p_p6_fl_sign','p_p6_fl_muon','p_p6_fl_gn','p_p6_fl_gnorm']){const gd=document.getElementById(id);if(gd&&gd._fullLayout){try{Plotly.Plots.resize(gd);}catch(e){}}}});}}
-  requestAnimationFrame(()=>{for(const id of ['p_eds1','p_eds2','p_eds3','p_eds4','p_eds5','p_pd1','p_pd2','p_pd3','p_pd4','p_pt1','p_pt2','p_pt3','p_pt4','p_pd5','p_pd6','p_pd7','p_p3_diff','p_p3_rnorm','p_p3_cos','p_sw0','p_sw1','p_sw2','p_sw3','p_sw4','p_sw5','p_sw6','p_sw7']){const gd=document.getElementById(id);if(gd&&gd._fullLayout&&gd.offsetParent!==null){try{Plotly.Plots.resize(gd);}catch(e){}}}});   // re-measure ★ prediction plots when shown
+  requestAnimationFrame(()=>{for(const id of ['p_eds1','p_eds2','p_eds3','p_eds4','p_eds5','p_pd1','p_pd2','p_pd3','p_pd4','p_pt1','p_pt2','p_pt3','p_pt4','p_pd5','p_pd6','p_pd7','p_p3_diff','p_p3_rnorm','p_p3_cos','p_sw0','p_sw1','p_sw2','p_sw3','p_sw4','p_sw5','p_sw6','p_sw7','p_qmr','p_qh']){const gd=document.getElementById(id);if(gd&&gd._fullLayout&&gd.offsetParent!==null){try{Plotly.Plots.resize(gd);}catch(e){}}}});   // re-measure ★ prediction plots when shown
   requestAnimationFrame(()=>{for(const id of PLOT_IDS){const gd=document.getElementById(id);if(gd&&gd._fullLayout&&gd.offsetParent!==null){try{Plotly.Plots.resize(gd);}catch(e){}}}});  // re-measure newly-shown plots
   if(typeof SCRUB_FRAC!=='undefined'&&SCRUB_FRAC<1)requestAnimationFrame(()=>applyTimeScrub(SCRUB_FRAC));   // keep a just-shown section's plots at the current rewound position
 }
@@ -3457,6 +3473,33 @@ function p6Push(g,t){if(!g||!(g.gd&&g.gd.length))return;const sl=document.getEle
 function p6Reset(){P6_SNAPS=[];P6_CURIDX=0;if(P6_RAF){cancelAnimationFrame(P6_RAF);P6_RAF=0;}P6_PENDING=-1;
   const sl=document.getElementById('p6_slider');if(sl){sl.max=0;sl.value=0;}
   const sp=document.getElementById('p6_step');if(sp)sp.textContent='live (latest)';}
+// ── Q eigenspectrum (qspec): per-iteration scree of Q_r=Σr_kQ_k and H=ΣQ_k + a scrubber (mirrors the §4 SLQ scree scrubber)
+let QSPEC_SNAPS=[], QSPEC_RAF=0, QSPEC_PENDING=-1, QSPEC_CURIDX=0; const QSPEC_MAXSNAPS=4000;
+function _buildQspecPlots(){
+  const mk=(id,ttl,color)=>{const L=baseLayout(ttl,'eigenvalue',false);L.xaxis.title='rank (sorted ↓)';L.yaxis.zeroline=true;L.yaxis.zerolinecolor='#cbd5e1';L.xaxis.zeroline=true;L.showlegend=false;newP(id,[{x:[],y:[],mode:'lines+markers',marker:{size:4,color:color},line:{color:color,width:1.4}}],L);};
+  mk('p_qmr','Q_r = Σ_k r_kQ_k  (residual-weighted)','#2563eb'); mk('p_qh','H = Σ_k Q_k  (unweighted)','#0f766e');
+}
+function qspecSnapRenderNow(i){const s=QSPEC_SNAPS[i];if(!s)return;QSPEC_CURIDX=i;
+  try{Plotly.restyle('p_qmr',{x:[s.mr.map((_,q)=>q)],y:[s.mr]},[0]);}catch(e){}
+  try{Plotly.restyle('p_qh',{x:[s.h.map((_,q)=>q)],y:[s.h]},[0]);}catch(e){}
+  const sp=document.getElementById('qspec_step');if(sp)sp.textContent='step '+s.t+'  ·  snapshot '+(i+1)+'/'+QSPEC_SNAPS.length;
+  const sl=document.getElementById('qspec_slider');if(sl&&+sl.value!==i)sl.value=i;}
+function qspecSnapRenderIdx(i){QSPEC_PENDING=i;if(QSPEC_RAF)return;QSPEC_RAF=requestAnimationFrame(()=>{QSPEC_RAF=0;const j=QSPEC_PENDING;QSPEC_PENDING=-1;if(j>=0)qspecSnapRenderNow(j);});}
+function qspecSnapPush(rec){if(!rec||!rec.mr)return;const sl=document.getElementById('qspec_slider'),wasLive=!sl||(+sl.value>=+sl.max);
+  QSPEC_SNAPS.push(rec);
+  if(QSPEC_SNAPS.length>QSPEC_MAXSNAPS){QSPEC_SNAPS=QSPEC_SNAPS.filter((_,ix)=>ix%2===0);if(QSPEC_CURIDX>=QSPEC_SNAPS.length)QSPEC_CURIDX=QSPEC_SNAPS.length-1;}
+  if(sl){sl.max=QSPEC_SNAPS.length-1;if(wasLive)sl.value=sl.max;}
+  qspecSnapRenderIdx(wasLive?QSPEC_SNAPS.length-1:(sl?+sl.value:QSPEC_SNAPS.length-1));}
+function qspecSnapReset(){QSPEC_SNAPS=[];QSPEC_CURIDX=0;if(QSPEC_RAF){cancelAnimationFrame(QSPEC_RAF);QSPEC_RAF=0;}QSPEC_PENDING=-1;
+  try{Plotly.restyle('p_qmr',{x:[[]],y:[[]]},[0]);Plotly.restyle('p_qh',{x:[[]],y:[[]]},[0]);}catch(e){}
+  const sl=document.getElementById('qspec_slider');if(sl){sl.max=0;sl.value=0;}}
+function toggleQspec(){const cb=document.getElementById('enQspec'),el=document.getElementById('sec_qspec');if(!cb||!el)return;
+  el.style.display=cb.checked?'':'none';
+  if(cb.checked){_buildQspecPlots();requestAnimationFrame(()=>{for(const id of ['p_qmr','p_qh']){const g=document.getElementById(id);if(g&&g._fullLayout){try{Plotly.Plots.resize(g);}catch(e){}}}});}}
+function _ensureQspec(){const cb=document.getElementById('enQspec');if(cb&&!cb.checked)cb.checked=true;
+  const el=document.getElementById('sec_qspec');const wasHidden=el&&el.style.display==='none';if(wasHidden)el.style.display='';
+  const g=document.getElementById('p_qmr');if(!g||!g._fullLayout)_buildQspecPlots();
+  if(wasHidden)requestAnimationFrame(()=>{for(const id of ['p_qmr','p_qh']){const gd=document.getElementById(id);if(gd&&gd._fullLayout){try{Plotly.Plots.resize(gd);}catch(e){}}}});}
 function _buildSSPlots(k){   // Self-stabilization: 4 line plots — p_ss1/p_ss2 have k curves (cos ∇S with top/bottom-k H_P eigvecs), p_ss3/p_ss4 one curve each
   k=k||Math.max(1,Math.min(10,parseInt((document.getElementById('ssk')||{}).value||'5')||5));
   const col=(i,n,warm)=>{const u=n>1?i/(n-1):0;return warm?`rgb(${Math.round(219-30*u)},${Math.round(39+70*u)},${Math.round(119-50*u)})`:`rgb(${Math.round(37+40*u)},${Math.round(99+90*u)},${Math.round(235-90*u)})`;};
@@ -3488,6 +3531,7 @@ function initLivePlots(n,kth,nResid,thr,n7,n8,multi){
   s15Reset();s15nReset();s15bReset();s15p34Reset();s15corrReset();s19Reset();s20Reset();s21Reset();p6Reset();S22CH.reset();S23CH.reset();s16Reset();s17Reset();   // §15+§16+§19+§20: drop the 2nd-difference + optimizer + grad-norm + M_r-histogram series
   trReset();    // §5: clear the trace-over-iterations curves
   slqSnapReset();   // §4: clear the SLQ-scree scrubber history
+  qspecSnapReset();   // Q-eigenspectrum: clear the scrubber history
   syncSectionVis(multi);   // gate sections by the panel toggles (multi from the actual run)
   const dis=s=>OPT.gs?s:s+'  (off)';
   // §1
@@ -3717,6 +3761,7 @@ function initLivePlots(n,kth,nResid,thr,n7,n8,multi){
     _edsAng('p_eds5','Mᵣ eigenspace rotation','lag 5','lag 10','#7c3aed','#db2777');
   }
   if(chk('enSS'))_buildSSPlots();   // Self-stabilization (ss): 4 streaming line plots, (re)built on run start when enabled
+  if(chk('enQspec')){_buildQspecPlots();qspecSnapReset();}   // Q eigenspectrum (qspec)
   newP('p_p3_diff',[{x:[],y:[],mode:'lines',name:'‖J·ṙ‖ (jrd)',line:{color:'#2563eb',width:1.7}},{x:[],y:[],mode:'lines',name:'‖J̇·r‖ (jdr)',line:{color:'#16a34a',width:1.7}},{x:[],y:[],mode:'lines',name:'diff = jrd−jdr',line:{color:'#dc2626',width:2}}],baseLayout('jrd, jdr & diff → t*','value',false));
   window._P3_CLEARED=false;   // reset the pred-3 "waiting for t*" placeholder each run
   const _p3note=[{text:'activates at the ‖J·ṙ‖−‖J̇·r‖<br>sign-change t* (none yet in this run)',xref:'paper',yref:'paper',x:0.5,y:0.5,showarrow:false,align:'center',font:{size:11,color:'#94a3b8'}}];
@@ -4129,6 +4174,7 @@ function pushPoint(t,D,n,kth,nResid){
         extP('p_eds3',{x:[[t],[t]],y:[[aH['5']],[aH['10']]]},[0,1]);
         extP('p_eds4',{x:[[t],[t]],y:[[aM['1']],[aM['2']]]},[0,1]);
         extP('p_eds5',{x:[[t],[t]],y:[[aM['5']],[aM['10']]]},[0,1]);}catch(e){}}
+  if(D.g_qspec){const g=D.g_qspec; _ensureQspec(); qspecSnapPush({t:t, mr:g.mr, h:g.h});}   // Q eigenspectrum: per-iteration scree → scrubber history
   if(D.g_ss){const g=D.g_ss;   // Self-stabilization: cos(∇S, ±k H_P eigvecs) [k curves each] + the 2 projected-gradient cosines (null y ⇒ gap, e.g. relu ⇒ ∇S≈0)
     _ensureSS((g.top||[]).length);   // build+REVEAL on every g_ss (idempotent) — a loaded capture restores enSS.checked but never fires onchange, so the section must be revealed here
     try{const kt=(g.top||[]).length, kb=(g.bot||[]).length;
@@ -4887,6 +4933,7 @@ function resetSim(){
   s14Reset();   // §14: clear the triplet-decomposition cubes + snapshots/slider too
   s15Reset();s15nReset();s15bReset();s15p34Reset();s15corrReset();s19Reset();s20Reset();s21Reset();p6Reset();S22CH.reset();S23CH.reset();s16Reset();s17Reset();   // §15+§16+§19+§20: clear the time-series too
   slqSnapReset();   // §4: clear the SLQ-scree scrubber history
+  qspecSnapReset();   // Q-eigenspectrum: clear the scrubber history
   updateButtons();
 }
 
@@ -5129,6 +5176,8 @@ function currentQueryParams(){   // the exact query-style param dict the backend
   {const e=document.getElementById('edsangk');if(e)o['edsangk']=e.value||'10';}   // early-dynamics plots 2-5: principal-angle subspace dim
   o['ss']=chk('enSS')?'1':'0';   // Self-stabilization (not a prediction): computed ONLY when enabled (Lanczos + 2 HVPs per eig-tick)
   {const e=document.getElementById('ssk');if(e)o['ssk']=e.value||'5';}   // self-stabilization: # top/bottom eigenvectors of the preconditioned Hessian H_P
+  o['qspec']=chk('enQspec')?'1':'0';
+  {const e=document.getElementById('qspeck');if(e)o['qspeck']=e.value||'40';}   // Q eigenspectrum
 
   {const e=document.getElementById('prthr');if(e)o['prthr']=e.value||'0.9';}   // ray anchor cos threshold
   {const e=document.getElementById('prm');if(e)o['prm']=e.value||'40';}   // ray grid points (min)
@@ -5211,16 +5260,16 @@ function addSweepPt(m){
 // prediction-2c/2d/2e (plots 4-5-7): DEDICATED σ-sweep (σ 0.1→10). 2c: x=A₊−A₋=Σσ_i(u_iᵀg)²/‖g‖² (squared-projection Rayleigh over M_r ±k eigenspace, g=Jᵀr at t=0), y=‖J_l‖−‖J₀‖ over l GD steps. 2d: both normalized. 2e: x=gᵀM_r g (full operator).
 function addSweepPt2c(m){
   const lbl='σ='+(+m.std).toPrecision(2)+' · l='+(m.l!=null?m.l:4);
-  if(m.xdiff!=null&&isFinite(m.xdiff)&&m.dj!=null&&isFinite(m.dj)){   // plot 2c: x = A₊−A₋ = Σσ_i(u_iᵀg)²/‖g‖² (squared-projection Rayleigh), y = ‖J_l‖−‖J₀‖ over l GD steps
-    SW4.x.push(m.xdiff);SW4.y.push(m.dj);SW4.cd.push([m.std,m.xdiff,m.dj]);SW4.text.push(lbl);SW4.col.push('#0891b2');
+  if(m.xdiff!=null&&isFinite(m.xdiff)&&m.dj!=null&&isFinite(m.dj)){   // plot 2c: x = A₊−A₋ = Σσ_i(u_iᵀg)²/‖g‖² (squared-projection Rayleigh), y = ‖J_l‖−‖J₀‖. BOTH axes signed-log (span orders of magnitude); raw in hover.
+    SW4.x.push(slog(m.xdiff));SW4.y.push(slog(m.dj));SW4.cd.push([m.std,m.xdiff,m.dj]);SW4.text.push(lbl);SW4.col.push('#0891b2');
     Plotly.restyle('p_sw4',{x:[SW4.x],y:[SW4.y],text:[SW4.text],customdata:[SW4.cd],'marker.color':[SW4.col]},[0]);
   }
-  if(m.xnorm!=null&&isFinite(m.xnorm)&&m.djn!=null&&isFinite(m.djn)){   // plot 2d: x = (A₊−A₋)/(A₊+A₋), y = (‖J_l‖−‖J₀‖)/(‖J₀‖+ε)
+  if(m.xnorm!=null&&isFinite(m.xnorm)&&m.djn!=null&&isFinite(m.djn)){   // plot 2d: x = (A₊−A₋)/(A₊+A₋), y = (‖J_l‖−‖J₀‖)/(‖J₀‖+ε) — normalized to [-1,1], keep LINEAR
     SW5.x.push(m.xnorm);SW5.y.push(m.djn);SW5.cd.push([m.std,m.xnorm,m.djn]);SW5.text.push(lbl);SW5.col.push('#7c3aed');
     Plotly.restyle('p_sw5',{x:[SW5.x],y:[SW5.y],text:[SW5.text],customdata:[SW5.cd],'marker.color':[SW5.col]},[0]);
   }
-  if(m.x2e!=null&&isFinite(m.x2e)&&m.dj!=null&&isFinite(m.dj)){   // plot 2e: x = gᵀM_r g (full operator), y = ‖J_l‖−‖J₀‖ over l GD steps
-    SW7.x.push(m.x2e);SW7.y.push(m.dj);SW7.cd.push([m.std,m.x2e,m.dj]);SW7.text.push(lbl);SW7.col.push('#c2410c');
+  if(m.x2e!=null&&isFinite(m.x2e)&&m.dj!=null&&isFinite(m.dj)){   // plot 2e: x = gᵀM_r g (full operator, UNnormalized ⇒ ~1e9), y = ‖J_l‖−‖J₀‖. BOTH axes signed-log; raw in hover.
+    SW7.x.push(slog(m.x2e));SW7.y.push(slog(m.dj));SW7.cd.push([m.std,m.x2e,m.dj]);SW7.text.push(lbl);SW7.col.push('#c2410c');
     Plotly.restyle('p_sw7',{x:[SW7.x],y:[SW7.y],text:[SW7.text],customdata:[SW7.cd],'marker.color':[SW7.col]},[0]);
   }
 }
@@ -5287,11 +5336,11 @@ function ensureSweepPlots(){   // build the pred-1&2 sweep scatter plots on dema
   {const L=baseLayout('Σd vs Σd²L/dt²','signed log₁₀(Σ d²L/dt²)',false);L.xaxis.title='signed log₁₀(Σ d)';L.showlegend=false;L.margin.r=62;L.xaxis.zeroline=true;L.xaxis.zerolinecolor='#cbd5e1';L.yaxis.zeroline=true;L.yaxis.zerolinecolor='#cbd5e1';L.annotations=_PH.slice();newP('p_sw2',_corrTr(),L);}
   {const L=baseLayout('Σd vs Σ∇‖J‖','signed log₁₀(Σ ∇‖J‖)',false);L.xaxis.title='signed log₁₀(Σ d)';L.showlegend=false;L.margin.r=62;L.xaxis.zeroline=true;L.xaxis.zerolinecolor='#cbd5e1';L.yaxis.zeroline=true;L.yaxis.zerolinecolor='#cbd5e1';L.annotations=_PH.slice();newP('p_sw3',_corrTr(),L);}
   {const L=baseLayout('Σ u₁ᵀ(QJr)v₁ vs Σ∇‖J‖','signed log₁₀(Σ ∇‖J‖)',false);L.xaxis.title='signed log₁₀(Σ u₁ᵀ(QJr)v₁)';L.showlegend=false;L.margin.r=62;L.xaxis.zeroline=true;L.xaxis.zerolinecolor='#cbd5e1';L.yaxis.zeroline=true;L.yaxis.zerolinecolor='#cbd5e1';L.annotations=_PH.slice();newP('p_sw6',_corrTr(),L);}   // prediction-5 (magnified PS)
-  {const L=baseLayout('2c · Δ‖J‖ over l steps  vs  M_r sign-split alignment','‖J_l‖ − ‖J₀‖   (l GD steps)',false);L.xaxis.title='A₊ − A₋   (M_r: Σ_i σ_i(u_iᵀg)² / ‖g‖²,  g=Jᵀr)';L.showlegend=false;L.xaxis.zeroline=true;L.xaxis.zerolinecolor='#cbd5e1';L.yaxis.zeroline=true;L.yaxis.zerolinecolor='#cbd5e1';L.annotations=_PH.slice();
+  {const L=baseLayout('2c · Δ‖J‖ over l steps  vs  M_r sign-split alignment','signed-log₁₀(‖J_l‖ − ‖J₀‖)',false);L.xaxis.title='signed-log₁₀(A₊ − A₋)   (M_r: Σ_i σ_i(u_iᵀg)² / ‖g‖²,  g=Jᵀr)';L.showlegend=false;L.xaxis.zeroline=true;L.xaxis.zerolinecolor='#cbd5e1';L.yaxis.zeroline=true;L.yaxis.zerolinecolor='#cbd5e1';L.annotations=_PH.slice();
    newP('p_sw4',[{x:[],y:[],mode:'markers+text',type:'scatter',text:[],customdata:[],textposition:'top center',textfont:{size:7,color:'#64748b'},hovertemplate:'init σ = %{customdata[0]:.3g} · A₊−A₋ = %{customdata[1]:.3g} · Δ‖J‖ = %{customdata[2]:.3g}<br>%{text}<extra></extra>',marker:{size:7,color:[],line:{color:'#1e293b',width:0.5}}}],L);}
   {const L=baseLayout('2d · normalized Δ‖J‖  vs  normalized alignment','(‖J_l‖ − ‖J₀‖)/(‖J₀‖+ε)',false);L.xaxis.title='(A₊ − A₋)/(A₊ + A₋)';L.showlegend=false;L.xaxis.zeroline=true;L.xaxis.zerolinecolor='#cbd5e1';L.yaxis.zeroline=true;L.yaxis.zerolinecolor='#cbd5e1';L.annotations=_PH.slice();
    newP('p_sw5',[{x:[],y:[],mode:'markers+text',type:'scatter',text:[],customdata:[],textposition:'top center',textfont:{size:7,color:'#64748b'},hovertemplate:'init σ = %{customdata[0]:.3g} · norm-align = %{customdata[1]:.3g} · norm-Δ‖J‖ = %{customdata[2]:.3g}<br>%{text}<extra></extra>',marker:{size:7,color:[],line:{color:'#1e293b',width:0.5}}}],L);}
-  {const L=baseLayout('2e · Δ‖J‖ over l steps  vs  full-operator gᵀM_r g','‖J_l‖ − ‖J₀‖   (l GD steps)',false);L.xaxis.title='gᵀM_r g   ( (Jᵀr)ᵀ M_r (Jᵀr),  M_r=Σ_k r_kQ_k, full operator )';L.showlegend=false;L.xaxis.zeroline=true;L.xaxis.zerolinecolor='#cbd5e1';L.yaxis.zeroline=true;L.yaxis.zerolinecolor='#cbd5e1';L.annotations=_PH.slice();
+  {const L=baseLayout('2e · Δ‖J‖ over l steps  vs  full-operator gᵀM_r g','signed-log₁₀(‖J_l‖ − ‖J₀‖)',false);L.xaxis.title='signed-log₁₀(gᵀM_r g)   ( (Jᵀr)ᵀ M_r (Jᵀr),  full operator )';L.showlegend=false;L.xaxis.zeroline=true;L.xaxis.zerolinecolor='#cbd5e1';L.yaxis.zeroline=true;L.yaxis.zerolinecolor='#cbd5e1';L.annotations=_PH.slice();
    newP('p_sw7',[{x:[],y:[],mode:'markers+text',type:'scatter',text:[],customdata:[],textposition:'top center',textfont:{size:7,color:'#64748b'},hovertemplate:'init σ = %{customdata[0]:.3g} · gᵀM_r g = %{customdata[1]:.3g} · Δ‖J‖ = %{customdata[2]:.3g}<br>%{text}<extra></extra>',marker:{size:7,color:[],line:{color:'#1e293b',width:0.5}}}],L);}
 }
 let SWEEP_THEN_RUN=false;   // set by the main Run button: run the sweep FIRST, then auto-start the main run when it ends. On one GPU a concurrent sweep would cancel the main run (per-device token) and a deferred sweep (after a long run) looks like it never fires — so sweep-first makes it visibly run the moment Run is clicked.
@@ -5425,6 +5474,8 @@ function applyCaptureParams(params){
   {const e=document.getElementById('enEDS');if(e&&('s42' in params))e.checked=(String(params.s42)==='1');}   // early-dynamics toggle — restore from s42 so a loaded capture re-shows it
   {const e=document.getElementById('enSS');if(e&&('ss' in params))e.checked=(String(params.ss)==='1');}      // self-stabilization toggle — restore from ss so a loaded capture re-shows it
   {const e=document.getElementById('ssk');if(e&&('ssk' in params))e.value=String(params.ssk);}
+  {const e=document.getElementById('enQspec');if(e&&('qspec' in params))e.checked=(String(params.qspec)==='1');}
+  {const e=document.getElementById('qspeck');if(e&&('qspeck' in params))e.value=String(params.qspeck);}
   {const e30=document.getElementById('en30'),e31=document.getElementById('en31');if(e30&&e31&&e30.checked&&e31.checked)e31.checked=false;}   // .checked= doesn't fire the en30/en31 mux; enforce it here (frozen-Q wins, matching the server) so a both-set capture doesn't force-show an empty sec_s23
   const pe=document.getElementById('preset');if(pe)pe.value='custom';
   if(typeof syncLossPanels==='function')syncLossPanels();
@@ -5619,19 +5670,51 @@ async function loadCaptureFile(file){
 }
 // "⬆ load from server": fetch a capture that lives in the backend's runs_captured/ (e.g. a SLURM run) and replay it,
 // without downloading the big .json to the local machine first. Lists via /captures if available; else prompts.
+function _pickServerCapture(list){   // scrollable + searchable modal listing ALL server captures (prompt() truncates long lists to ~20 lines)
+  const byBase={};   // dedupe: one row per capture, prefer the compacted X.min.json
+  for(const c of list){ const base=c.name.replace(/\.min\.json$/i,'').replace(/\.json(\.gz)?$/i,''); const isMin=/\.min\.json$/i.test(c.name);
+    if(!byBase[base]||(isMin&&!/\.min\.json$/i.test(byBase[base].name))) byBase[base]=c; }
+  const items=Object.values(byBase).sort((a,b)=>b.mtime-a.mtime);
+  return new Promise(resolve=>{
+    const ov=document.createElement('div'); ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:99999;display:flex;align-items:center;justify-content:center';
+    const box=document.createElement('div'); box.style.cssText='background:#fff;border-radius:10px;width:min(760px,93vw);max-height:82vh;display:flex;flex-direction:column;box-shadow:0 10px 40px rgba(0,0,0,.3);overflow:hidden;font-family:inherit';
+    box.innerHTML='<div style="padding:12px 16px;border-bottom:1px solid #e5e7eb;display:flex;gap:10px;align-items:center;flex-wrap:wrap">'
+      +'<b style="font-size:15px">Load capture from server</b><span style="color:#6b7280;font-size:12px" id="_scapn"></span>'
+      +'<input id="_scapf" placeholder="filter…" style="margin-left:auto;padding:5px 9px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;width:230px">'
+      +'<button id="_scapx" style="border:none;background:#f3f4f6;border-radius:6px;padding:5px 10px;cursor:pointer">✕</button></div>'
+      +'<div id="_scapl" style="overflow-y:auto;padding:6px 8px"></div>';
+    ov.appendChild(box); document.body.appendChild(ov);
+    const listEl=box.querySelector('#_scapl'), filtEl=box.querySelector('#_scapf'), nEl=box.querySelector('#_scapn');
+    const done=v=>{try{document.body.removeChild(ov);}catch(e){}resolve(v);};
+    const fmt=t=>{try{return new Date(t*1000).toLocaleString();}catch(e){return '';}};
+    function render(q){ q=(q||'').toLowerCase().trim(); listEl.innerHTML='';
+      const show=items.filter(c=>c.name.toLowerCase().includes(q));
+      nEl.textContent=show.length+' / '+items.length+' runs in runs_captured/';
+      if(!show.length){listEl.innerHTML='<div style="padding:14px;color:#9ca3af">no match</div>';return;}
+      for(const c of show){ const row=document.createElement('div');
+        row.style.cssText='padding:7px 10px;border-radius:6px;cursor:pointer;display:flex;gap:10px;align-items:baseline;font-size:13px;border-bottom:1px solid #f3f4f6';
+        row.onmouseenter=()=>row.style.background='#eff6ff'; row.onmouseleave=()=>row.style.background='';
+        row.innerHTML='<span style="font-family:monospace;flex:1;word-break:break-all">'+c.name.replace(/</g,'&lt;')+'</span>'
+          +'<span style="color:#6b7280;white-space:nowrap">'+c.size_mb+' MB'+(c.partial?' · <span style="color:#d97706">partial</span>':'')+'</span>'
+          +'<span style="color:#9ca3af;white-space:nowrap;font-size:11px">'+fmt(c.mtime)+'</span>';
+        row.onclick=()=>done(c.name); listEl.appendChild(row); }
+    }
+    render(''); filtEl.oninput=()=>render(filtEl.value); setTimeout(()=>filtEl.focus(),50);
+    box.querySelector('#_scapx').onclick=()=>done(null);
+    ov.onclick=e=>{if(e.target===ov)done(null);};
+    document.addEventListener('keydown',function esc(e){if(e.key==='Escape'){done(null);document.removeEventListener('keydown',esc);}});
+  });
+}
 async function loadFromServer(){
   const st=document.getElementById('status');
   let name=null;
   try{
     const r=await fetch('/captures',{cache:'no-store'});
     if(r.ok){
-      const list=await r.json();   // [{name,size_mb,mtime}] sorted newest-first
+      const list=await r.json();   // [{name,size_mb,mtime,partial}] sorted newest-first
       if(!list.length){if(st)st.textContent='no captures in runs_captured/ on the server yet.';return;}
-      const menu=list.map((c,i)=>`${i+1}. ${c.name}  (${c.size_mb} MB${c.partial?', partial':''})`).join('\n');
-      const pick=prompt('Server captures (runs_captured/) — enter a number or a filename:\n\n'+menu, '1');
-      if(pick===null)return;
-      const idx=parseInt(pick,10);
-      name=(Number.isInteger(idx)&&idx>=1&&idx<=list.length)?list[idx-1].name:pick.trim();
+      name=await _pickServerCapture(list);   // scrollable + searchable modal — shows ALL runs (prompt() truncates long lists)
+      if(name===null)return;
     }
   }catch(e){/* /captures not available (older server) → fall through to prompt */}
   if(!name){
@@ -5788,6 +5871,7 @@ if(typeof s14ApplyPanelFilter==='function')s14ApplyPanelFilter();   // apply the
 syncInitScaleEnabled();   // grey out init_scale on load if the current scheme ignores it (mup/xavier_*)
 {const sl=document.getElementById('g3d_slider');if(sl)sl.addEventListener('input',function(){g3dRenderIdx(+this.value);});}   // §11 scrub past snapshots
 {const sl=document.getElementById('slq4_slider');if(sl)sl.addEventListener('input',function(){slqSnapRenderIdx(+this.value);});}   // §4 scrub the SLQ-scree history
+{const sl=document.getElementById('qspec_slider');if(sl)sl.addEventListener('input',function(){qspecSnapRenderIdx(+this.value);});}   // Q-eigenspectrum scrubber
 {const sl=document.getElementById('s12_slider');if(sl)sl.addEventListener('input',function(){s12RenderIdx(+this.value);});}   // §12 scrub past snapshots
 {const sl=document.getElementById('s13_slider');if(sl)sl.addEventListener('input',function(){s12RenderIdx(+this.value);});}   // §13 scrub (shares §12 snapshots; s12RenderNow re-syncs both sliders)
 {const sl=document.getElementById('s14_slider');if(sl)sl.addEventListener('input',function(){s14RenderNow(+this.value);});}   // §14 scrub past snapshots (own S14_SNAPS)
@@ -6235,7 +6319,7 @@ function makeCompareSection(pre, kind) {
 }
 
 function reorderPredictionLayout(){   // base panels §1-6 on top, then Prediction-1&2 → 3 → 4 → 4.2(ray) → 5.1(trace) → 5.2(σ₁) → 6
-  const order=['sec_1','sec_2','sec_3','sec_slqH','sec_4','sec_s21','sec_s27','sec_eds','sec_ss','sec_sweep','sec_pred3_box','sec_pred4_box','sec_predray','sec_trace','sec_pred','sec_pred6'];   // sec_eds = Early-dynamics stats (NOT a prediction), ABOVE Prediction-1&2; sec_ss = Self-stabilization, right before Prediction-1&2; sec_predray = ★ Prediction 4.2 (ray), right after Prediction-4
+  const order=['sec_1','sec_2','sec_3','sec_slqH','sec_4','sec_s21','sec_s27','sec_eds','sec_ss','sec_qspec','sec_sweep','sec_pred3_box','sec_pred4_box','sec_predray','sec_trace','sec_pred','sec_pred6'];   // sec_eds = Early-dynamics stats (NOT a prediction), ABOVE Prediction-1&2; sec_ss = Self-stabilization, right before Prediction-1&2; sec_predray = ★ Prediction 4.2 (ray), right after Prediction-4
   const anchor=document.getElementById('sec_pred'); if(!anchor)return; const parent=anchor.parentNode; if(!parent)return;
   for(const id of order){const e=document.getElementById(id); if(e&&e.parentNode===parent)parent.insertBefore(e,anchor);}   // insert each before sec_pred (5.2 is the anchor)
   {const p6=document.getElementById('sec_pred6'); if(p6&&p6.parentNode===parent)parent.insertBefore(p6, anchor.nextSibling);}   // Prediction-6 goes AFTER 5.2 (sec_pred), so the numbering reads 1&2→3→4→5.1→5.2→6

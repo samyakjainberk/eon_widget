@@ -3528,6 +3528,57 @@ def _precond_half(v, opt, th, gL=None, J=None, jjt=None, rel=1e-6):
     return v                                               # gd (default)
 
 
+def _selfstab_gradS(th, X, Y, opt, u1, N, outD, frozen_fd):
+    """TRUE ∇_θ λ_max(H_P) (u₁ frozen) = ∇³L[w,w,·] + 2·(∂w/∂θ)ᵀ(∇²L w),  w = P^½u₁.  The 2nd term is the ∂P/∂θ
+    contribution — NEGLIGIBLE for gd (P=I) but DOMINANT for the adaptive optimizers (P moves with θ) — and is
+    computed by autograd through a DIFFERENTIABLE P^½ (sign: elementwise 1/√|∇L|; spectral: per-layer eigh whitening;
+    gaussnewton: (JᵀJ)^(−½) with J built by autograd). Verified against dense dλ_max: gd 1e-8, sign 2e-3, spectral 1e-5,
+    GN ~0.6% (rank-deficient JᵀJ). Falls back to `frozen_fd()` (the ∇²L-only part, = the true ∇S only for gd) if
+    higher-order autograd is unavailable or GN's Jacobian is too large. Returns (gS_vector_or_None, approx_flag)."""
+    dt = th.dtype; M = N * outD
+    if opt == "gaussnewton" and M > 256:                       # GN builds an M-row differentiable Jacobian ⇒ cap to keep the graph bounded
+        return frozen_fd(), True
+    try:
+        th_g = th.detach().clone().requires_grad_(True)
+        Lv = _TL.loss.value(_TL.model.forward(th_g, X), Y, N)
+        g1 = torch.autograd.grad(Lv, th_g, create_graph=True)[0]            # ∇L (with graph)
+        u1d = u1.detach().to(dt)
+        def phalf_ag(v):                                                    # differentiable P^½·v (in th_g)
+            if opt == "sign":
+                return v / (g1.abs() + 1e-12).sqrt()
+            if opt == "spectral":
+                spec = getattr(_TL.model, "spec", None)
+                if spec is None:
+                    return v
+                out = v * 1.0
+                for layer in spec:
+                    din, dout, wOff = layer[0], layer[1], layer[3]; n = din * dout
+                    W = th_g[wOff:wOff + n].view(din, dout)
+                    ew, Uw = torch.linalg.eigh(W @ W.t()); A = (Uw * ew.clamp_min(1e-6 * ew[-1]).pow(-0.125)) @ Uw.t()
+                    eb, Ub = torch.linalg.eigh(W.t() @ W); B = (Ub * eb.clamp_min(1e-6 * eb[-1]).pow(-0.125)) @ Ub.t()
+                    out = out.index_copy(0, torch.arange(wOff, wOff + n, device=v.device),
+                                         (A @ v[wOff:wOff + n].view(din, dout) @ B).reshape(-1))
+                return out
+            if opt == "gaussnewton":
+                o = _TL.model.forward(th_g, X).reshape(-1)[:M]
+                J = torch.stack([torch.autograd.grad(o[k], th_g, create_graph=True, retain_graph=True)[0] for k in range(M)])
+                e, U = torch.linalg.eigh(J @ J.t()); iv = e.clamp_min(1e-6 * e[-1]).pow(-1.5)   # s^{−3} (matches _precond_half)
+                return J.t() @ (U @ (iv * (U.t() @ (J @ v))))
+            return v                                                        # gd (⇒ term2 = 0)
+        w = phalf_ag(u1d); wd = w.detach()
+        hvp = torch.autograd.grad((g1 * wd).sum(), th_g, create_graph=True)[0]          # ∇²L·wd  (pure HVP, graph)
+        frozen = torch.autograd.grad((hvp * wd).sum(), th_g, retain_graph=True)[0]      # ∇³L[w,w,·]
+        c = hvp.detach()
+        if w.requires_grad and (w * c).sum().requires_grad:
+            term2 = 2.0 * torch.autograd.grad((w * c).sum(), th_g)[0]                   # 2·(∂w/∂θ)ᵀc  (∂P/∂θ, via autograd through P^½ only)
+        else:
+            term2 = torch.zeros_like(frozen)
+        gS = (frozen + term2).detach()
+        return (gS if torch.isfinite(gS).all() else frozen_fd()), False
+    except Exception:
+        return frozen_fd(), True                                           # robust fallback (OOM / no higher-order autograd)
+
+
 def _selfstab_payload(th, X, Y, p, opt, N, outD, Jc, rr, kss, mlan, seed):
     """SELF-STABILIZATION diagnostics (off by default). Cosines of the sharpness-gradient ∇S = ∇_θ λ_max(H_P) and the
     RAW loss gradient ∇L with the eigenvectors of the PRECONDITIONED Hessian H_P = P^½∇²L P^½ (P per optimizer; gd⇒∇²L).
@@ -3552,25 +3603,30 @@ def _selfstab_payload(th, X, Y, p, opt, N, outD, Jc, rr, kss, mlan, seed):
     tv, bv, tvals, bvals = _lanc16_ext(hp, p, kss, mlan, seed)          # top-kss ⊕ bottom-kss (eigvec, eigval) of H_P
     tv = [u.to(dtype=dt) for u in tv]; bv = [u.to(dtype=dt) for u in bv]
     u1 = tv[0]
-    # ∇S = ∇_θ λ_max(H_P) via the frozen-u₁ envelope theorem: ∇_θ(u₁ᵀH_P u₁) = ∇³L[w,w,·] with w=P^½u₁ (P frozen ⇒ the
-    # ∇²L part), computed as a central directional FD of ∇²L along ŵ. Only ∇S's DIRECTION matters (all plots are cosines).
-    w = phalf(u1); nw = float(w.norm()); gS = None
-    if nw > 1e-30:
-        wh = w / nw
-        eps_s = 1e-3 * (float(th.norm()) / (p ** 0.5) + 1.0)
-        gS = (hvpL(th + eps_s * wh, X, Y, wh) - hvpL(th - eps_s * wh, X, Y, wh)) / (2.0 * eps_s)
+    # ∇S = ∇_θ λ_max(H_P) (u₁ frozen). For gd (P=I) this is just ∇³L[u₁,u₁,·] (a central FD of ∇²L along ŵ=u₁). For the
+    # ADAPTIVE optimizers P moves with θ, so the ∂P/∂θ term DOMINATES ⇒ compute the TRUE gradient via _selfstab_gradS.
+    def _frozen_fd():                                          # ∇²L-only part (= true ∇S only for gd); also the fallback
+        wv = phalf(u1); nwv = float(wv.norm())
+        if nwv <= 1e-30:
+            return None
+        whv = wv / nwv; eps_s = 1e-3 * (float(th.norm()) / (p ** 0.5) + 1.0)
+        return (hvpL(th + eps_s * whv, X, Y, whv) - hvpL(th - eps_s * whv, X, Y, whv)) / (2.0 * eps_s)
+    if opt == "gd":
+        gS = _frozen_fd(); ss_approx = False
+    else:
+        gS, ss_approx = _selfstab_gradS(th, X, Y, opt, u1, N, outD, _frozen_fd)   # true ∇λ_max(H_P) incl ∂P/∂θ (autograd)
     def cos(a, b):
         na = float(a.norm()); nb = float(b.norm())
         return (float(a @ b) / (na * nb)) if (na > 1e-30 and nb > 1e-30) else None
     ngS = float(gS.norm()) if gS is not None else 0.0
     if gS is None or ngS < 1e-30:                           # ∇S ill-defined (e.g. relu nets ⇒ sharpness ~piecewise constant)
-        return {"top": [None] * kss, "bot": [None] * kss, "p3": None, "p4": None, "tvals": [float(x) for x in tvals], "k": kss}
+        return {"top": [None] * kss, "bot": [None] * kss, "p3": None, "p4": None, "tvals": [float(x) for x in tvals], "k": kss, "approx": ss_approx}
     top = [cos(gS, tv[i]) for i in range(kss)]
     bot = [cos(gS, bv[i]) for i in range(kss)]
     p3 = cos(gL - float(u1 @ gL) * u1, gS)                  # ∇L ⟂ u₁  vs ∇S
     sh = gS / ngS
     p4 = cos(gL - float(sh @ gL) * sh, u1)                  # ∇L ⟂ ∇S  vs u₁
-    return {"top": top, "bot": bot, "p3": p3, "p4": p4, "tvals": [float(x) for x in tvals], "k": kss}
+    return {"top": top, "bot": bot, "p3": p3, "p4": p4, "tvals": [float(x) for x in tvals], "k": kss, "approx": ss_approx}
 
 
 # ===================== streaming run =====================
@@ -3655,6 +3711,8 @@ def run_stream(P):
     edsangk = max(1, int(P.get("edsangk", 10)))  # early-dynamics plots 2-5: dimension of the top-K (by |λ|) eigenspace used for the mean principal angle (default 10)
     ss = P.get("ss", 0)                  # SELF-STABILIZATION panel (NOT a prediction; off by default): cos(∇S, ±k eigvecs of H_P) + 2 projected-gradient cosines
     ssk = max(1, min(10, int(P.get("ssk", 5))))  # self-stabilization: # of top/bottom eigenvectors of the preconditioned Hessian H_P (default 5)
+    qspec = P.get("qspec", 0)            # Q-SPECTRUM panel (NOT a prediction; off by default): per-iteration eigenspectra of Q_r=Σ_k r_kQ_k and H=Σ_k Q_k (scree + scrubber)
+    qspeck = max(2, min(80, int(P.get("qspeck", 40))))  # Q-spectrum: # of top ⊕ bottom eigenvalues of Q_r / H per iteration (default 40)
     s38 = P.get("s38", 0)                # prediction-5: trace-statistic prediction Tr(NTK) (quad/cubic × live/self, ±PSD) vs Tr(∇²L) & Tr(JᵀJ) (prediction widget)
     p5t0 = max(0, int(P.get("p5t0", 10)))   # prediction-5: iteration t0 at which Q, residual & J are frozen for the trace propagation
     stat_init = max(0, int(P.get("stat_init", 0)))   # prediction 5.1/5.2: iteration AFTER which the theoretical forecasts begin (0 = from the start)
@@ -4203,6 +4261,23 @@ def run_stream(P):
                     g_ss = _selfstab_payload(th, X, Y, p, opt, N, outD, Jc, rr, ssk, _mss, 0x55AB1E)
                 except Exception:
                     g_ss = None
+
+            # Q-SPECTRUM panel (qspec, off by default): per-iteration eigenSPECTRA (top-qspeck ⊕ bottom-qspeck eigenvalues,
+            # sorted descending) of the residual-weighted function Hessian Q_r=Σ_k r_kQ_k and the unweighted H=Σ_k Q_k
+            # (Q_k=∇²f_k; matrix-free via hvpS). NOT a prediction — for eyeballing the eigenstructure over training (widget
+            # keeps a per-iteration history + a scrubber). Independent of s42/ss.
+            g_qspec = None
+            if qspec and _TL.loss.name in ("mse", "ce") and (N * outD) <= grid3dcap and dataset != "owt" and Jc is not None and rr is not None:
+                try:
+                    _rc_q = rr[:M].reshape(N, outD)
+                    _pairs_mr = _eds_eigpairs(th, X, _rc_q, p, qspeck, Jc.dtype)                     # Q_r = Σ_k r_kQ_k eigenpairs (top-k ⊕ bottom-k)
+                    _ones_q = torch.ones(N, outD, dtype=Jc.dtype, device=_dev())
+                    _pairs_h = _eds_eigpairs(th, X, _ones_q, p, qspeck, Jc.dtype)                    # H = Σ_k Q_k eigenpairs (cotangent ≡ 1)
+                    _mr = sorted((float(lam) for (lam, _v) in _pairs_mr), reverse=True)              # eigenvalues, descending
+                    _h = sorted((float(lam) for (lam, _v) in _pairs_h), reverse=True)
+                    g_qspec = {"mr": _mr, "h": _h, "k": qspeck}
+                except Exception:
+                    g_qspec = None
 
             # §27: sliding-window 3D subspace projection of the six ∇θ gradient-vectors (50-step lag).
             #      At step t we finalize iteration t−50 (its [t−100,t] window is buffered); the trailing
@@ -5239,6 +5314,7 @@ def run_stream(P):
                 "g26": g26,                                    # §26: eigenvector-direction drift |cos(v_i(t),v_i(t−k))| for GN/NTK/M_r top-3 (+M_r bottom-3)
                 "g_eds": g_eds,                                # EARLY-DYNAMICS STATS (s42): σ-weighted ±M_r Jᵀr projection sums + H/M_r eigenspace mean principal angles at lags {1,2,5,10}
                 "g_ss": g_ss,                                  # SELF-STABILIZATION (ss): cos(∇S,±ssk eigvecs of preconditioned Hessian H_P) [top/bot lists] + p3/p4 projected-gradient cosines
+                "g_qspec": g_qspec,                            # Q-SPECTRUM (qspec): per-iteration eigenspectra {mr:[...], h:[...]} of Q_r=Σr_kQ_k and H=ΣQ_k (top⊕bottom-qspeck eigenvalues, descending)
                 "g27": g27,                                    # §27: sliding-window 3D subspace projection of the six ∇θ gradient-vectors (50-step lag)
                 "g27x": g27x,                                  # §7 extra panel: per-step cosine similarities + norms of {∇‖g‖², g, ∇‖J‖², J·ṙ, J̇·r, ∇‖J̇‖²}
                 "g28": g28,                                    # §28: TIMESCALES — panel 1 (5 J/r rate ratios, exact) + panel 2 (5 Q-Hessian rate ratios, Hutchinson)
@@ -5901,6 +5977,8 @@ def _parse_params(q):
         "s42": g("s42", "0") == "1",     # EARLY-DYNAMICS STATS panel (not a prediction): σ-weighted ±M_r Jᵀr projection + H/M_r eigenspace principal angles
         "ss": g("ss", "0") == "1",       # SELF-STABILIZATION panel (not a prediction): cos(∇S, ±k eigvecs of preconditioned Hessian H_P) + 2 projected-gradient cosines
         "ssk": fi("ssk", 5),             # self-stabilization: # top/bottom eigenvectors of H_P (default 5)
+        "qspec": g("qspec", "0") == "1", # Q-SPECTRUM panel (not a prediction): per-iteration eigenspectra of Q_r=Σ_k r_kQ_k and H=Σ_k Q_k (scree + scrubber)
+        "qspeck": fi("qspeck", 40),      # Q-spectrum: # top ⊕ bottom eigenvalues per iteration (default 40)
         "edsmrk": fi("edsmrk", 50),      # early-dynamics plot 1: top-K ⊕ bottom-K M_r eigenpairs
         "edsangk": fi("edsangk", 10),    # early-dynamics plots 2-5: principal-angle eigenspace dimension
         "s38": g("s38", "0") == "1",     # prediction-5: trace-statistic Tr(NTK) prediction (prediction widget)
