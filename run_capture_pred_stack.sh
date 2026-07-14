@@ -25,6 +25,7 @@ CIFAR="$DIR/data/cifar-10-batches-py"          # in-repo CIFAR/MNIST batches (sh
 MANIFEST=${MANIFEST:?set MANIFEST=/abs/path/to/manifest.txt (one eos_prediction*.py command per line)}
 
 cd "$DIR"
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True   # reduce CUDA fragmentation OOM (esp. big convs / vgg)
 mkdir -p runs_captured/logs
 
 echo "================================================================"
