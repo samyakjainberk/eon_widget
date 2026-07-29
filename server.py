@@ -4779,7 +4779,7 @@ def run_stream(P):
     gw4thr = float(P.get("gw4thr", 0.5))         # ★grok-④ span-membership threshold on projection energy ‖P_ref v‖² ∈ [0,1]
     gw4t0s = [int(x) for x in str(P.get("gw4t0s", "0,25,50,100")).split(",") if x.strip() != ""][:6] or [0, 25, 50, 100]   # ★grok-④ reference iterations T₀
     gw4tau = float(P.get("gw4tau", 0.1))         # (legacy; unused by the new grok-④ definition)
-    gw1 = int(P.get("gw1", 0))           # ★grok-① init-scale SWEEP (one-shot at t=0): for each σ (θ=σ·θ₀, log grid) a point — x=|uᵢᵀr|/‖r‖ (i=1,2,3, top NTK eigvecs), y=Δ‖J‖_F over gw1steps GD steps, colour=|gᵀM_rg|−|gᵀJᵀJg| with g=Jᵀr
+    gw1 = int(P.get("gw1", 0))           # ★grok-① init-scale SWEEP (one-shot at t=0): for each σ (θ=σ·θ₀, log grid) a point — x=|uᵢᵀr|/‖r‖ (i=1,2,3, top NTK eigvecs), y=Δ‖J‖_F over gw1steps GD steps, colour=gᵀM_rg−gᵀJᵀJg (signed) with g=Jᵀr
     gw1n = max(4, int(P.get("gw1n", 100)))        # ★grok-① # of σ points
     gw1steps = max(1, int(P.get("gw1steps", 4)))  # ★grok-① # GD steps for Δ‖J‖_F
     # ---- page-1 INTERVENTION experiments (one-shot live sweeps): ⑤ init-scale, ⑥ output-scale, ⑦ optimizer-λ, ⑧ activation ----
@@ -4969,7 +4969,9 @@ def run_stream(P):
     gw4h_refs = {}                          # ★grok-④ (H version): same, but for the UNWEIGHTED function Hessian H=Σ_i Q_i
     gwdiag_th = None                        # ★grok-②③④: small-init SHADOW trajectory (gwdiaginit·θ₀, plain GD) the diagnostics analyze (gwdiaginit=1 ⇒ main run)
     gw1_done = False                        # ★grok-①: one-shot init-scale sweep guard
-    gw5_done = gw6_done = gw7_done = gw8_done = gw9_done = gw10_done = gw3p0_done = False   # ★grok-⑤⑥⑦⑧⑨⑩ + ③Panel-0: one-shot guards
+    gw5_done = gw6_done = gw7_done = gw8_done = gw9_done = gw10_done = gw3p0_done = False   # ★grok-⑤⑥⑦⑧⑨⑩ + ③Panel-0: completion guards
+    gw5_started = gw6_started = gw7_started = gw9_started = gw10_started = gw3p0_started = False   # ★concurrency: streaming groks are SET UP once (guard) then advanced one tick per main diagnostic tick — main + groks train SIMULTANEOUSLY (fine-interleave, single GPU, lockstep)
+    _gw_drivers = {}                         # ★concurrency: which -> (_stream_runs generator, finalize_fn). Advanced ONE tick per main diagnostic tick; on completion emits a terminal "gwfinal" record (kept by the offline capture, unlike the transient "gwstream" partials)
     eds_hist = []              # EARLY-DYNAMICS (s42): rolling buffer of the last ~11 ticks' {t, h, mr} top-K eigenspaces, for the mean principal angle at lags {1,2,5,10}
     sec27_state = None         # §27: _Sec27State (rolling 101 vector-sets + sign refs), created lazily on the first §27 step
     sec27_prev = None          # §27: previous step's {r, J} for the discrete ṙ/J̇ gradient vectors
@@ -5665,7 +5667,7 @@ def run_stream(P):
                 th, Jc, rr = _gd_save
 
             # ★grok-① (gw1) — ONE-SHOT init-scale sweep (fires once, at the first diagnostic tick). For each σ
-            #   (θ=σ·θ₀, log grid 0.1→10): NTK top-3 eigvecs u_i, x_i=|u_iᵀr|/‖r‖, colour=|gᵀM_rg|−|gᵀJᵀJg| (g=Jᵀr),
+            #   (θ=σ·θ₀, log grid): NTK top-3 eigvecs u_i, x_i=|u_iᵀr|/‖r‖, colour=gᵀM_rg−gᵀJᵀJg (SIGNED, g=Jᵀr),
             #   y=Δ‖J‖_F over gw1steps GD steps at that θ. Tests the ratio→PS→alignment story across init scales.
             # ROUND-ROBIN the one-shot sweeps ①⑤⑥⑦⑧⑨: fire AT MOST ONE per diagnostic tick so the main dashboard
             # (loss / sharpness / gw②③④) keeps streaming between them — computing them ALL at the first tick made
@@ -5673,15 +5675,20 @@ def run_stream(P):
             # tick (t+ee>steps) fire together so nothing is dropped on short runs. _gw_fired set only on SUCCESS.
             _gw_fired = False
             g_gw1 = None
-            if gw1 and not gw1_done and (N * outD) <= grid3dcap and dataset != "owt" and Jc is not None and (not _gw_fired or (t + ee > steps)) and (not gw3 or gw3p0_done or (t + ee > steps)):
+            if gw1 and not gw1_done and (N * outD) <= grid3dcap and dataset != "owt" and Jc is not None and (not _gw_fired or (t + ee > steps)):
                 try:
-                    th0s = th.detach().clone()
+                    th0s = _th_init0.detach().clone()   # ★ the FRESH init θ₀ (NOT the trained/restored θ) — grok-① is an init-scale sweep θ=σ·θ₀, matching grok-⑤ which also scales _th_init0
                     # WIDE log grid of init scales (default 100 points, σ ∈ 10^[-1.5,1.5] ≈ 0.03 … 32).
                     _s1lo = float(P.get("gw1siglo", -3.0)); _s1hi = float(P.get("gw1sighi", 1.5))   # log10 σ range: extended DOWN to 1e-3 (was 10^-1.5≈0.03) so the small-init regime is sampled alongside the large values
                     sig = [float(10.0 ** (_s1lo + (_s1hi - _s1lo) * i / (gw1n - 1))) for i in range(gw1n)]
+                    _startfrac = float(P.get("gw1startfrac", 0.25))   # ★ keep only σ whose INIT sharpness ≤ startfrac·(2/lr) — every run starts well below EoS
+                    _eos = 2.0 / max(lr, 1e-9)
                     pts = []
                     for s_ in sig:
                         ths = (s_ * th0s).detach().clone()
+                        sharp0 = float(lanczos_extreme_vals(lambda v: hvpL(ths, X, Y, v), p, 1, min(p, 24), 0x5EED1)[0][0])   # init sharpness λmax(∇²L)
+                        if sharp0 > _startfrac * _eos:                # ★ drop σ that would START at/above ~¼·(2/lr): keep the low-sharpness inits only
+                            continue
                         o_ = _TL.model.forward(ths, X); rr_ = (Y - o_); r_ = rr_.reshape(-1)[:M]; rc_ = rr_.reshape(N, outD)
                         rn_ = float(r_.norm()) + 1e-30
                         Jc_, _ = jac_cols(ths, X); Jg_ = Jc_[:M]; g_ = Jg_.t() @ r_          # g = Jᵀr
@@ -5700,15 +5707,17 @@ def run_stream(P):
                         # ‖θ‖ is tiny at small σ, so such a cap would THROTTLE exactly the upscaling we want here.)
                         _beta = float(P.get("gw1eosfrac", 0.1))                    # target sharpness·lr fraction of 2 (EoS)
                         _lrceil = float(P.get("gw1lrmax", 0.0)) or (1.0e3 * max(lr, 1e-6))
-                        sharp0 = float(lanczos_extreme_vals(lambda v: hvpL(ths, X, Y, v), p, 1, min(p, 24), 0x5EED1)[0][0])
-                        thg = ths.clone(); lr_used = []
+                        thg = ths.clone(); lr_used = []                            # sharp0 (init sharpness) already computed + gated above
                         for _ in range(gw1steps):
                             sh_t = float(lanczos_extreme_vals(lambda v: hvpL(thg, X, Y, v), p, 1, min(p, 24), 0x5EED1)[0][0])
                             lr_t = min(_lrceil, (2.0 * _beta) / max(sh_t, 1e-12))  # ≈0.2/λmax: below EoS, UPSCALED for small σ
                             gl_, _ = gradL(thg, X, Y)
                             lr_used.append(lr_t); thg = thg - lr_t * gl_
                         Jcg, _ = jac_cols(thg, X); Jf1 = float((Jcg[:M] * Jcg[:M]).sum()) ** 0.5
-                        pts.append({"s": s_, "a1": a[0], "a2": a[1], "a3": a[2], "dJ": Jf1 - Jf0, "col": abs(gMrg) - abs(gJJg), "ps": sharp0, "lreff": (sum(lr_used) / len(lr_used) if lr_used else lr)})
+                        # colour = SIGNED gᵀM_rg − gᵀJᵀJg (= mrgn, the verified d‖Jᵀr‖²/dt driver). gᵀJᵀJg=‖Jg‖²≥0, so
+                        #   the sign is carried by gᵀM_rg — using |gᵀM_rg| would MASK the negative-residual-curvature regime,
+                        #   which is exactly the sign this experiment is meant to expose. red = mrgn>0 (norm-growth regime).
+                        pts.append({"s": s_, "a1": a[0], "a2": a[1], "a3": a[2], "dJ": Jf1 - Jf0, "col": gMrg - gJJg, "ps": sharp0, "lreff": (sum(lr_used) / len(lr_used) if lr_used else lr)})
                     g_gw1 = {"t": t, "pts": pts}; gw1_done = True; _gw_fired = True
                 except Exception:
                     g_gw1 = None; gw1_done = True
@@ -5734,7 +5743,7 @@ def run_stream(P):
                 gw8_done = True     # activation-swap is MLP-only ⇒ mark done so the data-rebuild guard resolves
 
             g_gw5 = None                                                          # ⑤ Initialization: sweep init scale σ
-            if gw5 and not gw5_done and _grokable and (not _gw_fired or (t + ee > steps)) and (not gw3 or gw3p0_done or (t + ee > steps)):
+            if gw5 and not gw5_started and _grokable and (not _gw_fired or (t + ee > steps)):
                 try:
                     th0g = _th_init0.detach().clone()   # sweep starts from the fresh init θ₀
                     sig = [float(10.0 ** (-0.8 + 1.6 * i / (gw_n - 1))) for i in range(gw_n)]   # σ ∈ [0.16, 6.3] log grid
@@ -5770,13 +5779,13 @@ def run_stream(P):
                     def _build5(recs, _t=t):
                         return {"t": _t, "axis": "init scale σ", "layer": gw5layer, "lrscale": gw5lrscale,
                                 "runs": [{**_s5specs[i], **(recs[i] or {})} for i in range(len(_s5specs))], "tuned": tuned_meta}
-                    _s5final = yield from _stream_runs(_s5gens, _build5, "gw5")     # LIVE
-                    g_gw5 = _build5(_s5final); gw5_done = True; _gw_fired = True
+                    _gw_drivers["gw5"] = (_stream_runs(_s5gens, _build5, "gw5"), _build5)   # ★concurrency: register — advanced per main tick, finalized on completion
+                    gw5_started = True; _gw_fired = True
                 except Exception:
-                    g_gw5 = None; gw5_done = True
+                    gw5_started = gw5_done = True
 
             g_gw6 = None                                                          # ⑥ Output scaling: sweep a gain α on the TARGET LABELS Y
-            if gw6 and not gw6_done and _grokable and (not _gw_fired or (t + ee > steps)) and (not gw3 or gw3p0_done or (t + ee > steps)):
+            if gw6 and not gw6_started and _grokable and (not _gw_fired or (t + ee > steps)):
                 try:
                     th0g = (gw6init * _th_init0).detach().clone()   # small init θ=gw6init·θ₀
                     _af = max(1.0001, float(P.get("gw6arange", 4.0)))            # α range factor: sweep is log-symmetric α ∈ [1/_af, _af] around 1 (widened default 4 ⇒ 0.25…4; was 0.5…2)
@@ -5801,13 +5810,13 @@ def run_stream(P):
                     def _build6(recs, _t=t):
                         return {"t": _t, "axis": "target-label gain α", "mode": gw6mode, "sigma": gw6init,
                                 "runs": [{**_s6specs[i], **(recs[i] or {})} for i in range(len(_s6specs))]}
-                    _s6final = yield from _stream_runs(_s6gens, _build6, "gw6")     # LIVE
-                    g_gw6 = _build6(_s6final); gw6_done = True; _gw_fired = True
+                    _gw_drivers["gw6"] = (_stream_runs(_s6gens, _build6, "gw6"), _build6)   # ★concurrency: register
+                    gw6_started = True; _gw_fired = True
                 except Exception:
-                    g_gw6 = None; gw6_done = True
+                    gw6_started = gw6_done = True
 
             g_gw7 = None                                                          # ⑦ Optimization: sweep λ in the modified update
-            if gw7 and not gw7_done and _grokable and (not _gw_fired or (t + ee > steps)) and (not gw3 or gw3p0_done or (t + ee > steps)):
+            if gw7 and not gw7_started and _grokable and (not _gw_fired or (t + ee > steps)):
                 try:
                     th0g = (gw7init * _th_init0).detach().clone()   # small init θ=gw7init·θ₀
                     _lammax = float(P.get("gw7lammax", 10.0))                     # λ sweep upper end (default 10; UI knob)
@@ -5852,13 +5861,13 @@ def run_stream(P):
                     def _build7(recs, _t=t):
                         return {"t": _t, "axis": _axlab, "rule": gw7rule, "sign": ("+" if gw7sign > 0 else "-"), "sweep": gw7sweep, "sigma": gw7init,
                                 "runs": [{**_s7specs[i], **(recs[i] or {})} for i in range(len(_s7specs))]}
-                    _s7final = yield from _stream_runs(_s7gens, _build7, "gw7")     # LIVE
-                    g_gw7 = _build7(_s7final); gw7_done = True; _gw_fired = True
+                    _gw_drivers["gw7"] = (_stream_runs(_s7gens, _build7, "gw7"), _build7)   # ★concurrency: register
+                    gw7_started = True; _gw_fired = True
                 except Exception:
-                    g_gw7 = None; gw7_done = True
+                    gw7_started = gw7_done = True
 
             g_gw8 = None                                                          # ⑧ Architecture: sweep activation (complexity ladder)
-            if gw8 and not gw8_done and _grokable and isinstance(_TL.model, MlpModel) and (not _gw_fired or (t + ee > steps)) and (not gw3 or gw3p0_done or (t + ee > steps)):   # activation swap rebuilds the MLP spec ⇒ MLP only
+            if gw8 and not gw8_done and _grokable and isinstance(_TL.model, MlpModel) and (not _gw_fired or (t + ee > steps)):   # activation swap rebuilds the MLP spec ⇒ MLP only
                 saved_model = _TL.model                                           # restore point (bound BEFORE the try)
                 try:
                     th0g = (gw8init * _th_init0).detach().clone(); acts = ["relu", "gelu", "tanh", "sine", "bspline", "bsplinetuned"]   # relu→gelu→tanh→sine→LEARNED-spline→RATIO-TUNED-spline ladder
@@ -5897,7 +5906,7 @@ def run_stream(P):
                     _TL.model = saved_model                                       # ALWAYS restore the real model
 
             g_gw9 = None                                                          # ⑨ random-search on the top-M_r subspace + 2 subspace baselines (bottom-M_r, random) vs a GD baseline
-            if gw9 and not gw9_done and _grokable and (not _gw_fired or (t + ee > steps)) and (not gw3 or gw3p0_done or (t + ee > steps)):
+            if gw9 and not gw9_started and _grokable and (not _gw_fired or (t + ee > steps)):
                 try:
                     th0g = (gw9init * _th_init0).detach().clone()   # small init θ=gw9init·θ₀
                     def _rs_gen(md, refresh=gw9refresh):   # IDENTICAL random-search protocol, only the search subspace (and its refresh) differ (full-batch: needs the stable objective for accept/reject)
@@ -5911,13 +5920,13 @@ def run_stream(P):
                                 {"x": 4, "name": "baseline: random subspace (fixed)"}, {"x": 5, "name": "GD baseline"}]
                     def _build9(recs, _t=t):
                         return {"t": _t, "axis": "optimizer", "sigma": gw9init, "runs": [{**_s9specs[i], **(recs[i] or {})} for i in range(len(_s9specs))]}
-                    _s9final = yield from _stream_runs(_s9gens, _build9, "gw9")     # LIVE
-                    g_gw9 = _build9(_s9final); gw9_done = True; _gw_fired = True
+                    _gw_drivers["gw9"] = (_stream_runs(_s9gens, _build9, "gw9"), _build9)   # ★concurrency: register
+                    gw9_started = True; _gw_fired = True
                 except Exception:
-                    g_gw9 = None; gw9_done = True
+                    gw9_started = gw9_done = True
 
             g_gw10 = None                                                         # ⑩ subspace-traversal random-search on Qr (top/bottom/null/random-K), step maximizes rᵀf (no gradient), for k∈{1,3,5}
-            if gw10 and not gw10_done and _grokable and (not _gw_fired or (t + ee > steps)) and (not gw3 or gw3p0_done or (t + ee > steps)):
+            if gw10 and not gw10_started and _grokable and (not _gw_fired or (t + ee > steps)):
                 try:
                     th0g10 = (gw10init * _th_init0).detach().clone()              # init θ=gw10init·θ₀ (default = main run's init)
                     _g10specs = []; _g10gens = []                                 # 3 k × 4 modes = 12 sub-runs, streamed in lockstep
@@ -5931,14 +5940,14 @@ def run_stream(P):
                         for i, (K, md, nm) in enumerate(_g10specs):
                             byk[str(K)]["runs"].append({"mode": md, "name": nm, **(recs[i] or {})})
                         return {"t": _t, "ks": [1, 3, 5], "byk": byk}
-                    _g10final = yield from _stream_runs(_g10gens, _build10, "gw10")   # LIVE: yields partial payloads as curves grow
-                    g_gw10 = _build10(_g10final); g_gw10["sigma"] = gw10init
-                    gw10_done = True; _gw_fired = True
+                    _fin10 = (lambda recs, _b=_build10, _sig=gw10init: dict(_b(recs), sigma=_sig))   # ★concurrency: finalize adds σ
+                    _gw_drivers["gw10"] = (_stream_runs(_g10gens, _build10, "gw10"), _fin10)
+                    gw10_started = True; _gw_fired = True
                 except Exception:
-                    g_gw10 = None; gw10_done = True
+                    gw10_started = gw10_done = True
 
             g_gw3p0 = None                                                        # ★grok-③ Panel-0: 5 quadratic-surrogate trainings (true / evolving-re-expand / fixed-init / random / low-rank Q)
-            if gw3 and not gw3p0_done and (N * outD) <= grid3dcap and dataset != "owt" and Jc is not None and (not _gw_fired or (t + ee > steps)):
+            if gw3 and not gw3p0_started and (N * outD) <= grid3dcap and dataset != "owt" and Jc is not None and (not _gw_fired or (t + ee > steps)):
                 try:
                     _th0p = _th_init0.detach().clone()
                     _reexp = max(1, int(P.get("gw3p0reexp", 25))); _lrrank = max(2, int(P.get("gw3p0rank", 8)))
@@ -5948,10 +5957,34 @@ def run_stream(P):
                                            gw_steps, gw_ev, lr, int(P["seed"]), _reexp, _lrrank) for md, _ in _p0specs]
                     def _buildp0(recs, _t=t):
                         return {"t": _t, "runs": [{"mode": _p0specs[i][0], "name": _p0specs[i][1], **(recs[i] or {})} for i in range(len(_p0specs))]}
-                    _p0final = yield from _stream_runs(_p0gens, _buildp0, "gw3p0")   # LIVE
-                    g_gw3p0 = _buildp0(_p0final); gw3p0_done = True; _gw_fired = True
+                    _gw_drivers["gw3p0"] = (_stream_runs(_p0gens, _buildp0, "gw3p0"), _buildp0)   # ★concurrency: register
+                    gw3p0_started = True; _gw_fired = True
                 except Exception:
-                    g_gw3p0 = None; gw3p0_done = True
+                    gw3p0_started = gw3p0_done = True
+
+            # ★concurrency (fine-interleave): advance EVERY active grok driver by ONE diagnostic tick, so the main run
+            #   and all groks train SIMULTANEOUSLY on this single GPU (lockstep). Each next() advances that grok's
+            #   sub-runs one tick and yields its LIVE "gwstream" partial; on completion we emit a terminal "gwfinal"
+            #   record (which the offline capture KEEPS, unlike the transient gwstream partials) and mark it done.
+            for _which in list(_gw_drivers.keys()):
+                _gen, _fin = _gw_drivers[_which]
+                try:
+                    yield next(_gen)
+                except StopIteration as _si:
+                    try:
+                        _payload = _fin(_si.value if _si.value is not None else [])
+                        yield {"type": "gwfinal", "which": _which, "payload": _payload}
+                    except Exception:
+                        pass
+                    _gw_drivers.pop(_which, None)
+                    if   _which == "gw5":   gw5_done = True
+                    elif _which == "gw6":   gw6_done = True
+                    elif _which == "gw7":   gw7_done = True
+                    elif _which == "gw9":   gw9_done = True
+                    elif _which == "gw10":  gw10_done = True
+                    elif _which == "gw3p0": gw3p0_done = True
+                except Exception:
+                    _gw_drivers.pop(_which, None)
 
             # EARLY-DYNAMICS STATS (s42) — NOT a prediction. Plot 1: σ-weighted projection of Jᵀr onto the ±M_r
             #   eigenvectors, split by eigenvalue sign — posSum=Σ_{λ_i>0, top-K}|λ_i·(v_i·Jᵀr)|/‖Jᵀr‖, negSum the
@@ -7136,6 +7169,23 @@ def run_stream(P):
         if _f27:
             yield {"type": "g27", "pts": _f27}
 
+    # ★concurrency: DRAIN any grok drivers that needed more ticks than the main loop provided (e.g. gw_steps/gw_ev >
+    #   steps/ee, or a late registration). Keep advancing them to completion so their curves finish and the terminal
+    #   "gwfinal" record lands in the saved capture. Bail if a newer /run superseded this one on the same GPU.
+    while _gw_drivers and mytok == RUN_TOKEN.get(_devkey, mytok):
+        for _which in list(_gw_drivers.keys()):
+            _gen, _fin = _gw_drivers[_which]
+            try:
+                yield next(_gen)
+            except StopIteration as _si:
+                try:
+                    yield {"type": "gwfinal", "which": _which, "payload": _fin(_si.value if _si.value is not None else [])}
+                except Exception:
+                    pass
+                _gw_drivers.pop(_which, None)
+            except Exception:
+                _gw_drivers.pop(_which, None)
+
     yield {"type": "done", "p": p}
 
 
@@ -7754,7 +7804,7 @@ def _parse_params(q):
         "gw4K": int(g("gw4K", "15")),     # ★grok-④ k = # top (and bottom) M_r directions
         "gw4thr": float(g("gw4thr", "0.5")), "gw4t0s": g("gw4t0s", "0,25,50,100"),   # ★grok-④ span threshold + reference iters T₀
         "gw4tau": float(g("gw4tau", "0.1")),  # ★grok-④ gradient-alignment threshold
-        "gw1": g("gw1", "0") == "1",     # ★grok-① one-shot init-scale sweep (Δ‖J‖ vs NTK-alignment, colored by |gᵀM_rg|−|gᵀJᵀJg|)
+        "gw1": g("gw1", "0") == "1",     # ★grok-① one-shot init-scale sweep (Δ‖J‖ vs NTK-alignment, colored by signed gᵀM_rg−gᵀJᵀJg)
         "gw1n": int(g("gw1n", "100")), "gw1steps": int(g("gw1steps", "4")),  # ★grok-① # σ points, # GD steps
         # ---- page-1 INTERVENTION experiments (one-shot live sweeps) ----
         "gw5": g("gw5", "0") == "1",     # ★grok-⑤ Initialization sweep
