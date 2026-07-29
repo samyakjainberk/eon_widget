@@ -4636,15 +4636,21 @@ def _opt_step_sched(X, Y, N, outD, lr0, safety, rule, lam1, lam2, xval, sign):
             st["Lref"] = float(_TL.loss.value(_TL.model.forward(th, X), Y, N))
         s = _sigma(th)
         eta = min(lr0, safety * 2.0 / s) if s > 1e-9 else lr0     # HOLD σ·η = safety·2 < 2 once σ nears the edge; else η₀
-        L0 = float(_TL.loss.value(_TL.model.forward(th, X), Y, N))
-        ceil = 3.0 * max(st["Lref"], L0, 1e-9)                    # cap vs a FIXED reference (not the previous step) ⇒ NO compounding blowup
+        ceil = 3.0 * max(st["Lref"], 1e-9)                       # ★FIXED cap = 3× the run's STARTING loss. The old `max(Lref, L0)`
+                                                                 #   included the CURRENT loss L0, so once a run drifted uphill the
+                                                                 #   ceiling tracked it upward — a COMPOUNDING feedback that let the
+                                                                 #   negative-λ star runs climb to ~1e3-1e5 (the observed blowup). A
+                                                                 #   truly fixed reference breaks that loop.
         thp = _apply(th, eta)
-        for _ in range(9):                                       # ANTI-BLOWUP backtrack: halve η until the step lands (finite &
-            if torch.isfinite(thp).all():                        #   loss ≤ 3× the run's starting loss). Since the ceiling is FIXED,
-                Lp = float(_TL.loss.value(_TL.model.forward(thp, X), Y, N))   # the loss can't compound step-over-step ⇒ the run stays
-                if Lp == Lp and Lp <= ceil: return thp                       # bounded (sharpening still shows; loss just can't explode).
+        for _ in range(9):                                       # ANTI-BLOWUP backtrack: halve η until the step LANDS below the FIXED
+            if torch.isfinite(thp).all():                        #   ceiling. (σ / PS can still grow while it lands ⇒ sharpening shows.)
+                Lp = float(_TL.loss.value(_TL.model.forward(thp, X), Y, N))
+                if Lp == Lp and Lp <= ceil: return thp
             eta *= 0.5; thp = _apply(th, eta)
-        return thp if torch.isfinite(thp).all() else th          # last resort: don't advance into NaN
+        return th                                                # ★FREEZE: no η kept the loss under the fixed ceiling ⇒ do NOT step.
+                                                                 #   Taking even the tiniest divergent step here compounds over the run
+                                                                 #   (verified: it re-blew to ~2e5); holding θ hard-bounds the loss at
+                                                                 #   the cap. Runs that genuinely descend never hit this (loss stays low).
     return step
 
 
@@ -5829,8 +5835,11 @@ def run_stream(P):
                     _axlab = {"mr": "λ₂ (M_r weight)", "gn": "λ₁ (JᵀJ weight)",
                               "bias": "λ₂ (M_r) with λ₁=λmax−λ₂", "both": "λ (λ₁=λ₂)"}.get(gw7sweep, "λ (λ₁=λ₂)")
                     _s7specs = []; _s7gens = []
+                    # FINE λ grid: grok-⑦ gets its OWN point count (gw7n, default 21 ⇒ step 1.0 over [−10,10]) so the
+                    #   λ-transition (learn → diverge) is resolved finely, independent of the other groks' gw_n.
+                    _gw7n = max(3, int(P.get("gw7n", 21)))
                     # SYMMETRIC sweeps force an ODD count so λ=0 (plain GD) is ALWAYS one of the points.
-                    _gwn = gw_n if (gw7sweep == "bias" or gw_n % 2 == 1) else gw_n + 1
+                    _gwn = _gw7n if (gw7sweep == "bias" or _gw7n % 2 == 1) else _gw7n + 1
                     for i in range(_gwn):
                         # swept value: SYMMETRIC −λmax → +λmax for mr/gn/both (see both the subtracting & adding regimes);
                         # bias keeps the convex 0 → λmax split (λ₁+λ₂=λmax can't go negative).
@@ -7814,6 +7823,7 @@ def _parse_params(q):
         "gw7": g("gw7", "0") == "1",     # ★grok-⑦ Optimizer-λ sweep
         "gw7rule": g("gw7rule", "star"), "gw7sign": g("gw7sign", "plus"), "gw7lammax": float(g("gw7lammax", "10.0")),   # ⑦ rule (DEFAULT taylor / star) + ± sign + λ-sweep upper end
         "gw7sweep": g("gw7sweep", "mr"), "gw7lam1": float(g("gw7lam1", "1.0")), "gw7lam2": float(g("gw7lam2", "0.0")),   # ⑦ sweep mode DEFAULT mr = λ₂ only (M_r), λ₁ fixed=1 — also bias/gn/both + fixed λ₁ (JᵀJ) / λ₂ (M_r)
+        "gw7n": int(g("gw7n", "21")),    # ⑦ FINE λ-grid point count (default 21 ⇒ step 1.0 over [−λmax,λmax]); forced odd so λ=0 is included
         "gw7schedsafety": float(g("gw7schedsafety", "0.9")),   # ⑦ negative-λ anti-self-stabilization lr schedule: keep σ·η = safety·2 below the EoS (2)
 
         "gw8": g("gw8", "0") == "1",     # ★grok-⑧ Activation sweep
