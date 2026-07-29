@@ -1,0 +1,653 @@
+<title>EoS Prediction Widgets — Field Guide</title>
+<style>
+/* ============================ tokens ============================ */
+:root{
+  --bg:#f6f8fb; --panel:#ffffff; --panel-2:#eef2f7; --ink:#0f1720; --ink-2:#33414f;
+  --muted:#657388; --line:#dbe3ec; --line-2:#c8d3df;
+  --blue:#2563eb; --teal:#0f766e; --amber:#b45309; --cyan:#0e7490; --rose:#b4324b;
+  --code-bg:#eef2f7; --code-ink:#243244; --shadow:0 1px 2px rgba(16,32,55,.06),0 8px 24px rgba(16,32,55,.05);
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono:ui-monospace,"SF Mono","JetBrains Mono","Menlo","Consolas",monospace;
+  --maxprose:70ch;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#0d1219; --panel:#131b25; --panel-2:#0f1620; --ink:#e6edf5; --ink-2:#b3c1d1;
+    --muted:#7f8ea3; --line:#243040; --line-2:#2a3a4d;
+    --blue:#6ea1ff; --teal:#4bbfad; --amber:#e2953f; --cyan:#3fb6cf; --rose:#f0798f;
+    --code-bg:#0f1620; --code-ink:#c6d3e2; --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px rgba(0,0,0,.35);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0d1219; --panel:#131b25; --panel-2:#0f1620; --ink:#e6edf5; --ink-2:#b3c1d1;
+  --muted:#7f8ea3; --line:#243040; --line-2:#2a3a4d;
+  --blue:#6ea1ff; --teal:#4bbfad; --amber:#e2953f; --cyan:#3fb6cf; --rose:#f0798f;
+  --code-bg:#0f1620; --code-ink:#c6d3e2; --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px rgba(0,0,0,.35);
+}
+:root[data-theme="light"]{
+  --bg:#f6f8fb; --panel:#ffffff; --panel-2:#eef2f7; --ink:#0f1720; --ink-2:#33414f;
+  --muted:#657388; --line:#dbe3ec; --line-2:#c8d3df;
+  --blue:#2563eb; --teal:#0f766e; --amber:#b45309; --cyan:#0e7490; --rose:#b4324b;
+  --code-bg:#eef2f7; --code-ink:#243244; --shadow:0 1px 2px rgba(16,32,55,.06),0 8px 24px rgba(16,32,55,.05);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+  font-size:16px;line-height:1.6;-webkit-font-smoothing:antialiased}
+.wrap{display:grid;grid-template-columns:248px minmax(0,1fr);gap:0;max-width:1240px;margin:0 auto}
+@media(max-width:900px){.wrap{grid-template-columns:1fr}}
+
+/* ============================ nav rail ============================ */
+nav{position:sticky;top:0;align-self:start;height:100vh;overflow-y:auto;
+  padding:26px 16px 40px 22px;border-right:1px solid var(--line);font-size:13.5px}
+@media(max-width:900px){nav{position:static;height:auto;border-right:none;border-bottom:1px solid var(--line)}}
+nav .brand{font-family:var(--mono);font-size:12px;letter-spacing:.04em;color:var(--muted);
+  text-transform:uppercase;margin-bottom:14px}
+nav a{display:block;color:var(--ink-2);text-decoration:none;padding:3px 8px;border-radius:6px;
+  border-left:2px solid transparent;line-height:1.4}
+nav a:hover{background:var(--panel-2);color:var(--ink)}
+nav a.grp{margin-top:14px;font-family:var(--mono);font-size:11px;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--muted);padding-left:8px}
+nav a.sub{padding-left:16px;font-size:13px}
+
+/* ============================ main ============================ */
+main{padding:34px 34px 90px;min-width:0}
+@media(max-width:560px){main{padding:24px 18px 70px}}
+h1{font-size:30px;line-height:1.15;letter-spacing:-.015em;margin:.1em 0 .1em;text-wrap:balance;font-weight:750}
+.lede{color:var(--ink-2);font-size:17px;max-width:var(--maxprose)}
+.meta{font-family:var(--mono);font-size:12px;color:var(--muted);margin:14px 0 0;
+  display:flex;gap:8px 18px;flex-wrap:wrap}
+.meta b{color:var(--ink-2);font-weight:600}
+h2{font-size:22px;letter-spacing:-.01em;margin:2.4em 0 .1em;padding-top:.5em;font-weight:700;text-wrap:balance}
+h2 .k{font-family:var(--mono);font-size:13px;color:var(--muted);font-weight:500}
+h3{font-size:15px;margin:1.8em 0 .4em;font-weight:680}
+p{max-width:var(--maxprose)}
+a.inline{color:var(--blue);text-decoration:none;border-bottom:1px solid color-mix(in oklab,var(--blue) 35%,transparent)}
+hr{border:none;border-top:1px solid var(--line);margin:2.4em 0}
+code,.mono{font-family:var(--mono);font-size:.9em;background:var(--code-bg);color:var(--code-ink);
+  padding:.08em .38em;border-radius:5px;word-break:break-word}
+h2 code,h3 code{font-size:.82em}
+.note{background:var(--panel-2);border:1px solid var(--line);border-left:3px solid var(--blue);
+  border-radius:8px;padding:12px 16px;margin:16px 0;max-width:var(--maxprose)}
+.note.warn{border-left-color:var(--rose)}
+.note .tag{font-family:var(--mono);font-size:11px;letter-spacing:.05em;text-transform:uppercase;
+  color:var(--muted);display:block;margin-bottom:3px}
+
+/* ============================ mental-model + glossary ============================ */
+.gloss{width:100%;border-collapse:collapse;font-size:14px;margin:12px 0}
+.gloss td{border-bottom:1px solid var(--line);padding:7px 10px;vertical-align:top}
+.gloss td:first-child{font-family:var(--mono);color:var(--teal);white-space:nowrap;width:1%;font-size:13px}
+.gloss tr:hover{background:var(--panel-2)}
+
+/* ============================ flow diagram ============================ */
+.flow{display:flex;align-items:stretch;gap:0;flex-wrap:wrap;margin:18px 0;
+  border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--panel)}
+.flow .step{flex:1 1 150px;padding:14px 16px;border-right:1px solid var(--line)}
+.flow .step:last-child{border-right:none}
+.flow .n{font-family:var(--mono);font-size:11px;color:var(--muted);letter-spacing:.06em}
+.flow .t{font-weight:640;margin:3px 0;font-size:14.5px}
+.flow .d{font-size:13px;color:var(--ink-2)}
+.flow .d code{font-size:.85em}
+
+/* ============================ big map table ============================ */
+.tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;margin:16px 0;box-shadow:var(--shadow)}
+table.map{border-collapse:collapse;width:100%;font-size:13px;min-width:640px}
+table.map th{position:sticky;top:0;background:var(--panel-2);text-align:left;padding:9px 12px;
+  font-family:var(--mono);font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);
+  border-bottom:1px solid var(--line-2);white-space:nowrap}
+table.map td{padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top;font-variant-numeric:tabular-nums}
+table.map tr:last-child td{border-bottom:none}
+table.map tr:hover td{background:var(--panel-2)}
+table.map .ui{font-weight:680;white-space:nowrap}
+table.map .m{font-family:var(--mono);font-size:12px;color:var(--code-ink);white-space:nowrap}
+table.map .foot{color:var(--rose);font-weight:600}
+.catdot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;vertical-align:middle}
+
+/* ============================ section cards ============================ */
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+  padding:18px 20px;margin:16px 0;box-shadow:var(--shadow);border-top:3px solid var(--edge,var(--blue))}
+.card-h{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:2px}
+.card-h .num{font-family:var(--mono);font-weight:700;font-size:15px;color:var(--edge,var(--blue))}
+.card-h .ttl{font-weight:700;font-size:17px;letter-spacing:-.01em}
+.card-h .keys{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}
+.chip{font-family:var(--mono);font-size:11px;padding:2px 7px;border-radius:999px;
+  border:1px solid var(--line-2);color:var(--ink-2);background:var(--panel-2);white-space:nowrap}
+.chip b{color:var(--edge,var(--blue));font-weight:700}
+.rows{margin-top:10px;display:grid;grid-template-columns:88px minmax(0,1fr);gap:2px 14px;font-size:14px}
+.rows dt{font-family:var(--mono);font-size:11px;letter-spacing:.03em;text-transform:uppercase;
+  color:var(--muted);padding-top:4px}
+.rows dd{margin:0;padding:2px 0;min-width:0}
+.rows dd.math{font-size:14px;line-height:1.75}
+.rows dd .op{color:var(--teal);font-weight:600}
+.eq{font-family:var(--mono);font-size:13px;background:var(--code-bg);color:var(--code-ink);
+  padding:2px 7px;border-radius:5px;display:inline-block;margin:1px 0;line-height:1.7;white-space:normal}
+.ref{font-family:var(--mono);font-size:12.5px;color:var(--teal)}
+.diff{color:var(--ink-2)}
+
+/* code blocks */
+pre{background:var(--code-bg);border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+  overflow-x:auto;font-family:var(--mono);font-size:12.5px;line-height:1.55;color:var(--code-ink);margin:14px 0}
+pre .c{color:var(--muted)}
+.k-teal{color:var(--teal)} .k-blue{color:var(--blue)} .k-amber{color:var(--amber)}
+
+.legend{display:flex;gap:16px;flex-wrap:wrap;font-size:13px;color:var(--ink-2);margin:6px 0 2px}
+.legend span{display:inline-flex;align-items:center}
+footer{margin-top:60px;padding-top:20px;border-top:1px solid var(--line);color:var(--muted);
+  font-size:13px;max-width:var(--maxprose)}
+.anchor{scroll-margin-top:18px}
+</style>
+
+<div class="wrap">
+<nav>
+  <div class="brand">Field Guide</div>
+  <a href="#top">Overview</a>
+  <a class="grp">Foundations</a>
+  <a class="sub" href="#picture">0 · The big picture</a>
+  <a class="sub" href="#arch">1 · Architecture &amp; data flow</a>
+  <a class="sub" href="#map">2 · The naming map ⚠</a>
+  <a class="grp">Core dashboard</a>
+  <a class="sub" href="#s1">1 · Loss / sharpness / edges</a>
+  <a class="grp">The ★ Predictions</a>
+  <a class="sub" href="#p12">1 &amp; 2 · the sweep</a>
+  <a class="sub" href="#p2cde">2c / 2d / 2e</a>
+  <a class="sub" href="#p3">3 · fixed J, evolving r</a>
+  <a class="sub" href="#p4">4 · fixed r, evolving J</a>
+  <a class="sub" href="#p42">4.2 · Phase-2a ray</a>
+  <a class="sub" href="#p51">5.1 · trace</a>
+  <a class="sub" href="#p52">5.2 · sharpness</a>
+  <a class="sub" href="#p6">6 · adaptive optimizers</a>
+  <a class="grp">New diagnostics</a>
+  <a class="sub" href="#eds">Early-dynamics stats</a>
+  <a class="sub" href="#ss">Self-stabilization</a>
+  <a class="sub" href="#qspec">Q eigenspectrum ★new</a>
+  <a class="grp">Inherited diagnostics</a>
+  <a class="sub" href="#s11">11 · 3D grids</a>
+  <a class="sub" href="#s12a">12a · principal angles</a>
+  <a class="sub" href="#s12b">12b · projections</a>
+  <a class="sub" href="#s18">18 · sample 1 vs 2</a>
+  <a class="sub" href="#s6">6 · residual↔spectrum</a>
+  <a class="sub" href="#s19">19 · grad-norm vs D²NTK</a>
+  <a class="sub" href="#s20">20 · M_r histograms</a>
+  <a class="sub" href="#s2223">22 / 23 · surrogates</a>
+  <a class="sub" href="#s24">24 · 1st vs 2nd-order Δf</a>
+  <a class="sub" href="#s25">25 · d/dt(J·r) dynamics</a>
+  <a class="sub" href="#s26">26 · eigenvector drift</a>
+  <a class="sub" href="#s7">7 · ∇θ subspace window</a>
+  <a class="sub" href="#s13">13 · JᵢᵀQⱼJₖrₖ approx</a>
+  <a class="sub" href="#s14">14 · Tr(ΔNTK) triplets</a>
+  <a class="grp">Working with it</a>
+  <a class="sub" href="#modify">Modify cookbook</a>
+  <a class="sub" href="#refpy">reference_predictions.py</a>
+</nav>
+
+<main id="top">
+  <h1>EoS Prediction Widgets — a field guide</h1>
+  <p class="lede">Everything the two prediction widgets compute and draw, in one place: the mental model, how a number travels from <code>server.py</code> to a plot, and a card for every section — what it shows, the math, where the data comes from, and how to change it.</p>
+  <div class="meta">
+    <span><b>mirrors</b> index_prediction.html</span>
+    <span><b>&amp;</b> index_prediction_multiclass.html</span>
+    <span><b>backend</b> server.py</span>
+    <span><b>companion code</b> reference_predictions.py</span>
+  </div>
+  <div class="note">
+    <span class="tag">How to read this</span>
+    Skim <a class="inline" href="#picture">§0</a> and <a class="inline" href="#arch">§1</a> once for the mental model, then use it as a lookup: the <a class="inline" href="#map">naming map</a> tells you which knob maps to which code symbol, and each section card is self-contained. Line numbers drift as the file changes — treat them as a starting point and confirm with the named function / DOM id, which are stable. The runnable <a class="inline" href="#refpy"><code>reference_predictions.py</code></a> re-implements the math in plain autograd so you can read the logic linearly.
+  </div>
+
+  <!-- ============================================================= -->
+  <h2 id="picture" class="anchor">0 · The big picture</h2>
+  <p>Both widgets study one thing: <b>what happens to the curvature of a network as full-batch gradient descent trains it</b> — the <i>Edge of Stability</i> (sharpness climbs until it sits at 2/η and hovers) and <i>progressive sharpening</i> (the top Hessian/NTK eigenvalues grow during training). Every "★ Prediction" asks a version of the same question: <b>can a simple linearized or frozen model of the network forecast that curvature growth?</b> The other panels dissect the objects those forecasts are built from.</p>
+
+  <p>Everything on screen is assembled from a small cast of objects. Get comfortable with these and the whole widget reads easily:</p>
+  <table class="gloss">
+    <tr><td>θ</td><td>the flat parameter vector, <code>p</code> = number of parameters.</td></tr>
+    <tr><td>f(θ)</td><td>network outputs, shape (N, out); flattened to length <b>M = N·out</b>.</td></tr>
+    <tr><td>J</td><td>the <b>Jacobian</b> ∂f/∂θ, shape (M, p). Row <i>k</i> is ∇<sub>θ</sub>f<sub>k</sub>.</td></tr>
+    <tr><td>r</td><td>the <b>residual</b>, length M. MSE: r = y − f. CE (multiclass): r = onehot − softmax(f).</td></tr>
+    <tr><td>g</td><td>the loss gradient ∇<sub>θ</sub>L. GD steps θ ← θ − η·g. (Note: <code>J·r</code> ≡ Jᵀr is the <i>GN gradient</i>, ∝ g for MSE.)</td></tr>
+    <tr><td>NTK</td><td>J Jᵀ, shape (M, M) — the tangent kernel in <i>output</i> space. Its top eigenvalue is the "NTK edge".</td></tr>
+    <tr><td>GN</td><td>Jᵀ J, shape (p, p) — Gauss-Newton. For CE this becomes the <b>Fisher</b> J̃ᵀΛJ̃.</td></tr>
+    <tr><td>Q<sub>k</sub></td><td>∇²<sub>θ</sub>f<sub>k</sub>, the (p×p) Hessian of one scalar output — "per-sample function Hessian".</td></tr>
+    <tr><td>M<sub>r</sub></td><td>Σ<sub>k</sub> r<sub>k</sub> Q<sub>k</sub> — the <b>residual-weighted</b> function Hessian. Also called <code>Q_r</code>. Drives most spectral panels.</td></tr>
+    <tr><td>H</td><td>Σ<sub>k</sub> Q<sub>k</sub> — the <b>unweighted</b> function Hessian (cotangent ≡ 1).</td></tr>
+    <tr><td>∇²L</td><td>the full <b>loss</b> Hessian. λ<sub>max</sub>(∇²L) is the <b>sharpness</b>; EoS is sharpness ≈ 2/η.</td></tr>
+  </table>
+  <p>The one identity worth memorizing — it's how nearly every spectral panel is computed:</p>
+  <p><span class="eq">Σ<sub>k</sub> c<sub>k</sub> Q<sub>k</sub> = ∇²<sub>θ</sub>( Σ<sub>k</sub> c<sub>k</sub> f<sub>k</sub> ) = the Hessian of the scalar (f·c)</span></p>
+  <p>So a residual-weighted (c = r) or unweighted (c = 1) function-Hessian is just the Hessian of one scalar — you get it from one Hessian-vector product (matrix-free, via <code>hvpS</code>) or, for a small MLP, materialize it whole (that's the new Q-eigenspectrum panel).</p>
+
+  <!-- ============================================================= -->
+  <h2 id="arch" class="anchor">1 · Architecture &amp; data flow</h2>
+  <p>There is <b>one backend</b>, <code>server.py</code>, and <b>two browser front-ends</b> that are 98% identical — <code>index_prediction.html</code> (MSE / regression) and <code>index_prediction_multiclass.html</code> (CE / softmax). They differ by ~83 lines: presets and loss defaults, not new compute. A run flows like this:</p>
+  <div class="flow">
+    <div class="step"><div class="n">01 · browser</div><div class="t">Build params</div><div class="d">Each <code>enN</code> checkbox → an <code>opt</code> map → <code>sK</code> flags. POST to <code>/run</code>.</div></div>
+    <div class="step"><div class="n">02 · server</div><div class="t">Train + measure</div><div class="d"><code>run_stream</code> does GD; every step builds one record dict with many <code>g_*</code> keys.</div></div>
+    <div class="step"><div class="n">03 · SSE</div><div class="t">Stream records</div><div class="d">Records stream back over Server-Sent Events, one per step (or eig-tick).</div></div>
+    <div class="step"><div class="n">04 · browser</div><div class="t">Draw</div><div class="d"><code>pushPoint(t, D)</code> reads <code>D.g_*</code> and extends Plotly traces.</div></div>
+  </div>
+  <div class="rows" style="grid-template-columns:120px 1fr;max-width:var(--maxprose)">
+    <dt>Toggles</dt><dd>A checkbox <code>enX</code> in the browser maps to a server flag <code>sK</code>. Some flags gate <b>compute</b> (off = not calculated); others only gate <b>visibility</b> (the data is always computed, the box just shows/hides the panel). The predictions 3, 4, 5.1, 5.2 are always computed (their <code>enP*</code> boxes only hide the DOM); the ray, adaptive-optimizer, and all the new/inherited diagnostics gate compute too.</dd>
+    <dt>Captures</dt><dd>A run can be saved to a <code>.json</code> (+ compact <code>.min.json</code>) and re-loaded later — the browser replays the records through the same <code>pushPoint</code>. Panels with a <b>scrubber</b> (Q-spectrum, §11, §12, §20, §22/23, §6, Prediction-6 scree) keep a per-snapshot history so you can slide back to any iteration.</dd>
+    <dt>Parity</dt><dd>The base widget also has a browser-only compute backend, so a few sections (§13, §14, §19, §20, §6) are <b>recomputed client-side</b> and must match the server byte-for-byte — when you change one of these, change both the Python and the JS. The predictions, self-stab, and Q-spectrum have <b>no browser mirror</b> (server-only). Note: this is about the <i>recompute mechanism</i>, not availability — on the prediction widget's GPU backend most inherited sections are gated off entirely (see the <a class="inline" href="#s11">Inherited diagnostics</a> caveat).</dd>
+  </div>
+
+  <!-- ============================================================= -->
+  <h2 id="map" class="anchor">2 · The naming map <span class="k">— the #1 footgun</span></h2>
+  <p>The number you see on screen, the checkbox id, the server flag, and the payload key <b>do not line up</b>. The on-screen "§20" is not server <code>s20</code>. Keep this table handy — it is the single most useful thing in this guide when you go editing.</p>
+  <div class="legend">
+    <span><span class="catdot" style="background:var(--amber)"></span>prediction</span>
+    <span><span class="catdot" style="background:var(--blue)"></span>new diagnostic</span>
+    <span><span class="catdot" style="background:var(--teal)"></span>inherited diagnostic</span>
+    <span><span class="catdot" style="background:var(--cyan)"></span>core</span>
+  </div>
+  <div class="tablewrap"><table class="map">
+    <thead><tr><th>On screen</th><th>checkbox</th><th>server flag</th><th>payload key</th><th>compute fn (server.py)</th><th>what it is</th></tr></thead>
+    <tbody>
+    <tr><td class="ui"><span class="catdot" style="background:var(--cyan)"></span>1 · dashboard</td><td class="m">en1 / en2 / en3</td><td class="m">s1 s2 s3</td><td class="m">step (loss, sharp, r, hf*)</td><td class="m">inline (main loop)</td><td>loss · sharpness λmax(∇²L) · residual · edges of H</td></tr>
+    <tr><td class="ui"><span class="catdot" style="background:var(--amber)"></span>Prediction 1&amp;2</td><td class="m">enPs (view)</td><td class="m">mode=sweep</td><td class="m">sweeppt / sweeppt2c</td><td class="m">run_sweep</td><td>lr/σ sweep: t* prediction &amp; init-alignment (2c/2d/2e)</td></tr>
+    <tr><td class="ui"><span class="catdot" style="background:var(--amber)"></span>Prediction 3</td><td class="m">enP3 (view)</td><td class="m">s36 <span class="foot">(forced 1)</span></td><td class="m">g_pred3 / g_pred3m</td><td class="m">inline @~4318</td><td>freeze J at PS onset, evolve residual theory</td></tr>
+    <tr><td class="ui"><span class="catdot" style="background:var(--amber)"></span>Prediction 4</td><td class="m">enP4 (view)</td><td class="m">s37 <span class="foot">(forced 1)</span></td><td class="m">g_pred4 / g_pred4m</td><td class="m">inline @~4422</td><td>freeze residual/M_r, propagate J → NTK spectrum</td></tr>
+    <tr><td class="ui"><span class="catdot" style="background:var(--amber)"></span>Prediction 4.2 ray</td><td class="m">enPR</td><td class="m">s41</td><td class="m">g_ray</td><td class="m">inline @~4532</td><td>frozen straight-line ray, geometry vs clock</td></tr>
+    <tr><td class="ui"><span class="catdot" style="background:var(--amber)"></span>Prediction 5.1 trace</td><td class="m">enPt (view)</td><td class="m">s38 <span class="foot">(forced 1)</span></td><td class="m">g_trace</td><td class="m">inline @~4600</td><td>Tr(NTK) forecasts (quad/cubic × live/self)</td></tr>
+    <tr><td class="ui"><span class="catdot" style="background:var(--amber)"></span>Prediction 5.2 sharp</td><td class="m">enPd (view)</td><td class="m">s14 s16 s17 <span class="foot">(forced)</span></td><td class="m">thP* / c51*</td><td class="m">§9 / §10 blocks</td><td>sharpness forecasts (re-skins §9/§10)</td></tr>
+    <tr><td class="ui"><span class="catdot" style="background:var(--amber)"></span>Prediction 6 adaptive</td><td class="m">enP6</td><td class="m">s39</td><td class="m">g_pred6</td><td class="m">inline @~4660</td><td>gd/sign/spectral/GN trajectories, GN scree</td></tr>
+    <tr><td class="ui"><span class="catdot" style="background:var(--blue)"></span>Early-dynamics stats</td><td class="m">enEDS</td><td class="m">s42</td><td class="m">g_eds</td><td class="m">_eds_eigpairs</td><td>±M_r projection split + eigenspace angle drift</td></tr>
+    <tr><td class="ui"><span class="catdot" style="background:var(--blue)"></span>Self-stabilization</td><td class="m">enSS</td><td class="m">ss</td><td class="m">g_ss</td><td class="m">_selfstab_payload</td><td>cos(∇S, ±k eigvecs of H_P) + projected grads</td></tr>
+    <tr><td class="ui"><span class="catdot" style="background:var(--blue)"></span>Q eigenspectrum <b>★</b></td><td class="m">enQspec</td><td class="m">qspec</td><td class="m">g_qspec</td><td class="m">_qspec_full_eigs</td><td>full spectrum of Q_r &amp; H over training (scrubber)</td></tr>
+    <tr><td class="ui"><span class="catdot" style="background:var(--teal)"></span>11 · 3D grids</td><td class="m">en18</td><td class="m foot">s18</td><td class="m">g3d</td><td class="m">inline @~5003</td><td>N×N×N Jᵢᵀ Qⱼ Jₖ tensors, rotatable</td></tr>
+    <tr><td class="ui"><span class="catdot" style="background:var(--teal)"></span>12a · principal angles</td><td class="m">en19</td><td class="m foot">s19</td><td class="m">g4d</td><td class="m">_sec12_payload</td><td>per-sample Qᵢ eigenspace angles</td></tr>
+    <tr><td class="ui"><span class="catdot" style="background:var(--teal)"></span>12b · projections</td><td class="m">en22</td><td class="m foot">s22</td><td class="m">g4d</td><td class="m">_sec12_payload</td><td>gradient onto top/bottom Qᵢ eigenvectors</td></tr>
+    <tr><td class="ui"><span class="catdot" style="background:var(--teal)"></span>18 · sample 1 vs 2</td><td class="m">en26</td><td class="m foot">s26</td><td class="m">g4d</td><td class="m">_sec12_payload</td><td>per-sample projections at N=2</td></tr>
+    <tr><td class="ui"><span class="catdot" style="background:var(--teal)"></span>6 · residual↔spectrum</td><td class="m">en29</td><td class="m foot">s29</td><td class="m">g21</td><td class="m">_sec21_payload</td><td>r &amp; J·r onto NTK / M_r eigenvectors</td></tr>
+    <tr><td class="ui"><span class="catdot" style="background:var(--teal)"></span>19 · grad-norm vs D²NTK</td><td class="m">en27</td><td class="m foot">s27</td><td class="m">g19</td><td class="m">_sec19_payload</td><td>Δ‖g‖ vs 2nd-diff of Tr(NTK) — MSE+GD only</td></tr>
+    <tr><td class="ui"><span class="catdot" style="background:var(--teal)"></span>20 · M_r histograms</td><td class="m">en28</td><td class="m foot">s28</td><td class="m">g20</td><td class="m">_sec20_payload</td><td>M_r spectrum &amp; alignment with J directions</td></tr>
+    <tr><td class="ui"><span class="catdot" style="background:var(--teal)"></span>22 / 23 · surrogates</td><td class="m">en30 / en31</td><td class="m foot">s30 / s31</td><td class="m">g22 / g23</td><td class="m">_quad_surrogate_main</td><td>§20 on a frozen-Q / random-Q quadratic model</td></tr>
+    <tr><td class="ui"><span class="catdot" style="background:var(--teal)"></span>24 · 1st/2nd-order Δf</td><td class="m">en32</td><td class="m foot">s32</td><td class="m">g24</td><td class="m">inline @~4079</td><td>A=JJᵀr vs B=(η/2N)(J·r)ᵀQₖ(J·r)</td></tr>
+    <tr><td class="ui"><span class="catdot" style="background:var(--teal)"></span>25 · d/dt(J·r)</td><td class="m">en33</td><td class="m foot">s33</td><td class="m">g25</td><td class="m">_sec25_cosines</td><td>product-rule split + 7-vector ∇θ cosines</td></tr>
+    <tr><td class="ui"><span class="catdot" style="background:var(--teal)"></span>26 · eigenvector drift</td><td class="m">en34</td><td class="m foot">s34</td><td class="m">g26</td><td class="m">_sec26_eigvecs</td><td>|cos(vᵢ(t),vᵢ(t−k))| for GN / NTK / M_r</td></tr>
+    <tr><td class="ui"><span class="catdot" style="background:var(--teal)"></span>7 · ∇θ subspace window</td><td class="m">en35</td><td class="m foot">s35</td><td class="m">g27 / g27x</td><td class="m">_sec27_* / _Sec27State</td><td>sliding-window 3D subspace of 6 ∇θ vectors</td></tr>
+    <tr><td class="ui"><span class="catdot" style="background:var(--teal)"></span>13 · JᵢᵀQⱼJₖrₖ</td><td class="m">en21</td><td class="m foot">s21</td><td class="m">g13</td><td class="m">_sec13_stats</td><td>rank-k approximations vs exact triple product</td></tr>
+    <tr><td class="ui"><span class="catdot" style="background:var(--teal)"></span>14 · Tr(ΔNTK) triplets</td><td class="m">en20</td><td class="m foot">s20</td><td class="m">g14</td><td class="m">_sec14_payload</td><td>per-(i,j,k) 5-factor decomposition</td></tr>
+    </tbody>
+  </table></div>
+  <div class="note warn">
+    <span class="tag">Read the red cells</span>
+    Where the flag is red, the on-screen number and the server flag <b>collide with an unrelated section</b>. On-screen "§13" is server <code>s21</code>; server <code>s13</code> is a <i>different</i> (§7a-NTK-align) section entirely. On-screen "§14" is <code>s20</code> — not <code>_sec20_payload</code> (that's on-screen "§20", flag <code>s28</code>). Always resolve a section by its <b>compute function name</b>, never by its number.
+  </div>
+
+  <!-- ============================================================= CORE -->
+  <h2 id="s1" class="anchor">Core dashboard</h2>
+  <div class="card" style="--edge:var(--cyan)">
+    <div class="card-h"><span class="num">1</span><span class="ttl">Loss, sharpness, residual, spectral edges of H</span>
+      <span class="keys"><span class="chip">always on</span><span class="chip">key <b>step</b></span></span></div>
+    <dl class="rows">
+      <dt>What</dt><dd>The four core training signals — the dashboard you watch to see EoS happen: loss, the sharpness sitting against its 2/η line, the signed residual, and the top/bottom eigenvalues of the function Hessian H.</dd>
+      <dt>Math</dt><dd class="math">
+        <span class="eq">loss L (log)</span> · <span class="eq">sharpness = λmax(∇²L)</span> vs dashed <span class="eq">2/η</span> ·
+        <span class="eq">residual r = y − f</span> · <span class="eq">λmax(H)/N, λmin(H)/N,  H = Σₐ ∇²fₐ</span></dd>
+      <dt>Data→Draw</dt><dd><code>hvpL</code> (loss-Hessian, for sharpness) &amp; <code>hvpF</code> (function-Hessian edges) via Lanczos → record keys <code>loss, sharp, hfMax, hfMin, r</code> → plots <code>p_loss, p_sharp, p_resid, p_eHfX</code>.</dd>
+      <dt>CE diff</dt><dd class="diff">Multiclass sends <code>r = []</code>, so the residual panel stays empty; the other three are identical.</dd>
+      <dt>Modify</dt><dd>Restyle the EoS edge at the <code>withThr</code> shape (~html:1278); change the sharpness operator at <code>hvpL</code>.</dd>
+      <dt>reference.py</dt><dd class="ref">sharpness() · loss_hessian() · weighted_fn_hessian(c=1) for H</dd>
+    </dl>
+  </div>
+
+  <!-- ============================================================= PREDICTIONS -->
+  <h2 class="anchor">The ★ Predictions</h2>
+  <p>Each prediction freezes some linearization of the network and asks whether it forecasts the real curvature dynamics. They share a shape: an <b>anchor</b> (a training event that triggers the freeze), a <b>propagated theory</b>, and an overlay of <b>predicted vs actual</b>. Solid = frozen-model theory, dashed = a richer (cubic/evolving) theory, dots = the actual run.</p>
+
+  <div class="card anchor" id="p12" style="--edge:var(--amber)">
+    <div class="card-h"><span class="num">1&amp;2</span><span class="ttl">The lr / σ sweep</span>
+      <span class="keys"><span class="chip">mode=<b>sweep</b></span><span class="chip">run_sweep</span><span class="chip">MSE only</span></span></div>
+    <dl class="rows">
+      <dt>What</dt><dd>A separate run: trains a fresh net for ~100 random (learning-rate, init-scale) pairs and tests whether early-training theory predicts the onset of progressive sharpening. Each dot is one (lr, σ) net.</dd>
+      <dt>Math</dt><dd class="math">Define <span class="eq">d = ‖J·ṙ‖ − ‖J̇·r‖ = ‖JᵀJ∇L‖ − ‖M_r∇L‖</span>. <b>Plot 1/2</b>: predicted step t* of d's sign-flip (quadratic, then cubic) vs actual t*. <b>Plot 2/2b</b>: <span class="eq">signed-log Σd</span> vs concavity of loss / vs net Δ‖J‖.</dd>
+      <dt>Data→Draw</dt><dd><code>run_sweep</code> yields <code>type:"sweeppt"</code> → <code>addSweepPt</code> → <code>p_sw0..p_sw3</code>, <code>p_sw6</code>. Pearson/Spearman labels are computed client-side.</dd>
+      <dt>CE diff</dt><dd class="diff"><b>MSE only in both.</b> The ‖J·ṙ‖−‖J̇·r‖ theory is derived for squared loss; under CE the sweep produces no points.</dd>
+      <dt>Modify</dt><dd>Curvature window = <code>swmrk</code> input; look-ahead for Δ‖J‖ = <code>swjl</code>.</dd>
+      <dt>reference.py</dt><dd class="ref">pred_signchange() · sweep driver in demo</dd>
+    </dl>
+  </div>
+
+  <div class="card anchor" id="p2cde" style="--edge:var(--amber)">
+    <div class="card-h"><span class="num">2c/2d/2e</span><span class="ttl">Init curvature-alignment → short-horizon Δ‖J‖</span>
+      <span class="keys"><span class="chip">en_sw2cd / en_sw2e</span><span class="chip">sweeppt2c</span></span></div>
+    <dl class="rows">
+      <dt>What</dt><dd>A dedicated σ-sweep testing whether the gradient's alignment with the curvature at init predicts whether ‖J‖ grows over the next few steps. This is the panel you recently rebuilt to use <b>squared</b> projections (gauge-invariant).</dd>
+      <dt>Math</dt><dd class="math">With g = Jᵀr and (σᵢ, uᵢ) the top⊕bottom eigenpairs of M_r at t=0:
+        <span class="eq">A₊ = Σ<sub>σᵢ&gt;0</sub> σᵢ(uᵢᵀg)²/‖g‖²</span>, <span class="eq">A₋ = Σ<sub>σᵢ&lt;0</sub> |σᵢ|(uᵢᵀg)²/‖g‖²</span> — so A₊−A₋ is the signed Rayleigh gᵀM_r g / ‖g‖² over the ±k eigenspace.
+        <b>2c</b>: x = A₊−A₋, y = ‖J_l‖−‖J₀‖. <b>2d</b>: both normalized. <b>2e</b>: x = full operator gᵀM_r g (one HVP), y = ‖J_l‖−‖J₀‖. All x on signed-log.</dd>
+      <dt>Data→Draw</dt><dd><code>sweeppt2c</code> → <code>addSweepPt2c</code> → <code>p_sw4</code> (2c), <code>p_sw5</code> (2d), <code>p_sw7</code> (2e), in the hidden second row.</dd>
+      <dt>reference.py</dt><dd class="ref">pred2c_alignment()</dd>
+    </dl>
+  </div>
+
+  <div class="card anchor" id="p3" style="--edge:var(--amber)">
+    <div class="card-h"><span class="num">3</span><span class="ttl">fixed J · evolving r</span>
+      <span class="keys"><span class="chip">s36</span><span class="chip">g_pred3</span></span></div>
+    <dl class="rows">
+      <dt>What</dt><dd>At PS onset (first upward crossing of d = ‖J·ṙ‖−‖J̇·r‖ at t*), freeze the Jacobian J* = J(t*) and evolve the linear NTK residual theory — does a frozen-kernel model still predict how the residual decays?</dd>
+      <dt>Math</dt><dd class="math">1st-order: <span class="eq">r<sub>t+1</sub> = (I − (η/N) J* J*ᵀ) r<sub>t</sub></span>. 2nd-order adds a frozen-Q curvature term; an "evolving-J" theory refreshes J every <code>p3k</code> steps. Re-anchors every <code>p3rep</code>. Axes: diff · ‖r‖ (log) · cos(r_act, r_thy).</dd>
+      <dt>Data→Draw</dt><dd>keys <code>g_pred3</code> {jrd, jdr, diff, tstar, rAct/rThy(2/3), cos(2/3)} → <code>p_p3_diff, p_p3_rnorm, p_p3_cos</code>.</dd>
+      <dt>CE diff</dt><dd class="diff">Runs under CE; only r changes meaning (onehot−softmax). The recurrence is structurally unchanged.</dd>
+      <dt>Modify</dt><dd>Refresh cadence <code>p3k</code>; set <code>p3rep=0</code> for a single freeze.</dd>
+      <dt>reference.py</dt><dd class="ref">pred3_frozenJ_residual()</dd>
+    </dl>
+  </div>
+
+  <div class="card anchor" id="p4" style="--edge:var(--amber)">
+    <div class="card-h"><span class="num">4</span><span class="ttl">fixed r · evolving J</span>
+      <span class="keys"><span class="chip">s37</span><span class="chip">g_pred4</span></span></div>
+    <dl class="rows">
+      <dt>What</dt><dd>The dual of Prediction-3: freeze the residual-weighted Hessian M_r at a phase-1 anchor, then propagate the Jacobian by it and read off the NTK spectrum — does a frozen-M_r model reproduce progressive sharpening (growth of the top NTK eigenvalues) and keep the right directions?</dd>
+      <dt>Math</dt><dd class="math">Anchor when |(Jᵀr)ᵀu₁|/‖Jᵀr‖ ≥ <code>p4thr</code> (u₁ = top M_r eigvec). Propagate <span class="eq">J<sub>s+1</sub> = J<sub>s</sub> + (η/N) M_r J<sub>s</sub></span>, then read top-3 λ(JJᵀ) and eigenvector |cos|. Evolving-Qr theory refreshes r every <code>p4s</code>.</dd>
+      <dt>Data→Draw</dt><dd>keys <code>g_pred4</code> {kAct, kPred, kPredE, cos5(E), cosGN5(E)} → <code>p_pd5</code> (λ, log), <code>p_pd6</code> (NTK |cos|), <code>p_pd7</code> (GN |cos|).</dd>
+      <dt>CE diff</dt><dd class="diff">Runs under CE; the M_r·J propagation and eigh(JJᵀ) stay the plain versions — only r feeding M_r changes.</dd>
+      <dt>Modify</dt><dd>Anchor sensitivity <code>p4thr</code>; evolving-Qr refresh <code>p4s</code>.</dd>
+      <dt>reference.py</dt><dd class="ref">pred4_frozenMr_ntk()</dd>
+    </dl>
+  </div>
+
+  <div class="card anchor" id="p42" style="--edge:var(--amber)">
+    <div class="card-h"><span class="num">4.2</span><span class="ttl">Phase-2a ray</span>
+      <span class="keys"><span class="chip">enPR → s41</span><span class="chip">g_ray</span></span></div>
+    <dl class="rows">
+      <dt>What</dt><dd>At each new alignment event, freeze the state and walk a straight, un-trained ray θ(s) = θ_a + s·w₁ along the top M_r eigenvector — does the geometry along the frozen direction predict what the run traces, and where does Phase-2a end? Multi-anchor: a bar switches between rays.</dd>
+      <dt>Math</dt><dd class="math">Anchor when cos(∇L, w₁) rises through <code>prthr</code> in a new direction. Shape: σ₁(J(s)), ‖J(s)‖_F vs s. Clock: t(s)=∫ds/V, V=(η/N)‖J(s)ᵀr_a‖. Exit: first crossing of ‖J̇·r_a‖ and ‖J·ṙ‖.</dd>
+      <dt>Data→Draw</dt><dd><code>g_ray</code> anchor/step records → <code>p_ray_sig, p_ray_jf, p_ray_clock, p_ray_exit</code> + <code>#ray_bar</code>.</dd>
+      <dt>CE diff</dt><dd class="diff">Runs under CE with the plain (un-whitened) M_r/NTK; residual = y − softmax(f).</dd>
+      <dt>Modify</dt><dd>Anchor sensitivity <code>prthr</code>; grid/look-ahead <code>prm</code>/<code>prK</code>.</dd>
+      <dt>reference.py</dt><dd class="ref">phase2a_ray()</dd>
+    </dl>
+  </div>
+
+  <div class="card anchor" id="p51" style="--edge:var(--amber)">
+    <div class="card-h"><span class="num">5.1</span><span class="ttl">trace</span>
+      <span class="keys"><span class="chip">s38</span><span class="chip">g_trace</span></span></div>
+    <dl class="rows">
+      <dt>What</dt><dd>Like the sharpness predictions but tracks the NTK <b>trace</b> Tr(JᵀJ) = ‖J‖²_F instead of the top eigenvalue. Four forecasts: {quadratic, cubic} × {live residual, self residual}.</dd>
+      <dt>Math</dt><dd class="math">Actual overlays: <span class="eq">‖J‖²_F/N</span> and <span class="eq">Tr(∇²L)/N</span> (Hutchinson, 24 probes). Per frozen step ΔJ = scale·Q_t[g] (+ cubic T-term); with-PSD keeps ‖ΔJ‖², without-PSD drops it. Self residual uses the frozen quadratic model r_q = Y − (f₀+J₀Δθ+½ΔθᵀQ₀Δθ).</dd>
+      <dt>Data→Draw</dt><dd><code>g_trace</code> {trGN, trHess, qLive, qSelf, cLive, cSelf} → <code>p_pt1..p_pt4</code>.</dd>
+      <dt>Modify</dt><dd>Cubic re-anchor cadence <code>every_iter_cubic_approx</code>; Hutchinson probes <code>NP5=24</code>.</dd>
+      <dt>reference.py</dt><dd class="ref">trace_forecast()</dd>
+    </dl>
+  </div>
+
+  <div class="card anchor" id="p52" style="--edge:var(--amber)">
+    <div class="card-h"><span class="num">5.2</span><span class="ttl">sharpness</span>
+      <span class="keys"><span class="chip">re-skins §9/§10</span><span class="chip">thP* / c51*</span></span></div>
+    <dl class="rows">
+      <dt>What</dt><dd>Forecasts σ₁ = λmax(∇²L) and overlays it on both "edges" (full-Hessian sharpness and the NTK edge). Same 4 forecasts. No dedicated flag — it renders the §9 (quadratic) and §10 (cubic) payloads.</dd>
+      <dt>Math</dt><dd class="math">σ₀ = λmax(J₀J₀ᵀ), u₁ = top NTK eigvec, v₁ = normalize(J₀ᵀu₁). Multiplicative recursion <span class="eq">σ<sub>t+1</sub> = σ<sub>t</sub>[1 + 2(η/N)(r·u₁)·v₁ᵀQ[u₁]v₁]</span>. +PSD adds the dropped ‖ΔJᵀu₁‖² floor.</dd>
+      <dt>Data→Draw</dt><dd>keys <code>thP, thPpsd, thP_d, thPpsd_d, thA, thAH, c51*</code> → <code>p_pd1..p_pd4</code>.</dd>
+      <dt>Modify</dt><dd>Frozen-Q window <code>every_iter_quadric_approx</code>; forecast start <code>stat_init</code>.</dd>
+      <dt>reference.py</dt><dd class="ref">sharpness_forecast()</dd>
+    </dl>
+  </div>
+
+  <div class="card anchor" id="p6" style="--edge:var(--amber)">
+    <div class="card-h"><span class="num">6</span><span class="ttl">Adaptive optimizers</span>
+      <span class="keys"><span class="chip">enP6 → s39</span><span class="chip">g_pred6</span></span></div>
+    <dl class="rows">
+      <dt>What</dt><dd>Four independent trajectories from the same θ₀ — GD, Signed-GD, Spectral (Muon), Gauss-Newton — each with its own LR, no momentum. Compares how the top-50 GN eigenvalue scree, loss, sharpness, and feature-learning magnitudes evolve per optimizer.</dd>
+      <dt>Math</dt><dd class="math">Directions d (θ←θ−lr·d): <b>gd</b> ∇L · <b>sign</b> sign(∇L) · <b>spectral</b> per-matrix (WWᵀ)<sup>−¼</sup>W(WᵀW)<sup>−¼</sup> (polar UVᵀ) · <b>GN</b> −Jᵀ(JJᵀ)⁻¹r (MSE) or Fisher natural gradient (CE). Scree = top-50 eig(JᵀJ), log-y.</dd>
+      <dt>Data→Draw</dt><dd><code>g_pred6</code> {gd, sign, spectral, gaussnewton scree, loss, sharp, feat} → <code>p_p6_sign/muon/gn</code>, <code>p_p6_loss/sharp</code>, <code>p_p6_fl_*</code>; <code>#p6_slider</code> scrubs the scree.</dd>
+      <dt>CE diff</dt><dd class="diff">GN scree uses the <b>Fisher</b>-whitened J̃ = Λ<sup>½</sup>J; the GN step becomes the natural gradient F⁺∇L (<code>_gn_natgrad</code>). sign/spectral/gd unchanged.</dd>
+      <dt>Modify</dt><dd>Per-opt LR inputs; scree depth <code>_K6=min(50,M)</code>; Muon exponent in <code>_muon_whiten</code>.</dd>
+      <dt>reference.py</dt><dd class="ref">opt_dir() · precond_half() (shared with self-stab)</dd>
+    </dl>
+  </div>
+
+  <!-- ============================================================= NEW -->
+  <h2 class="anchor">New diagnostic sections</h2>
+  <p>These three sit <b>above</b> the predictions and are recent additions. They are <i>not</i> predictions — they dissect the operators the predictions are built from.</p>
+
+  <div class="card anchor" id="eds" style="--edge:var(--blue)">
+    <div class="card-h"><span class="num">EDS</span><span class="ttl">Early-dynamics stats</span>
+      <span class="keys"><span class="chip">enEDS → s42</span><span class="chip">g_eds</span></span></div>
+    <dl class="rows">
+      <dt>What</dt><dd>Early-training geometry of M_r. Plot 1: how strongly J·r projects onto the positive vs negative M_r eigenvectors. Plots 2–5: how fast the top eigenspaces of H and M_r rotate (mean principal angle vs {1,2,5,10} steps ago).</dd>
+      <dt>Math</dt><dd class="math">Plot 1: <span class="eq">Σ<sub>σᵢ≷0</sub> |σᵢ(uᵢᵀJᵀr)|/‖Jᵀr‖</span> (top-K by <code>edsmrk</code>). Plots 2–5: mean principal angle, cosθ = √λ(GGᵀ), G = V(t)ᵀV(t−lag), over the top-<code>edsangk</code> eigenspace.</dd>
+      <dt>Data→Draw</dt><dd><code>g_eds</code> {posSum, negSum, angH{}, angMr{}} → <code>p_eds1..p_eds5</code> (streaming lines; the lag history is server-side, <b>no client scrubber</b>).</dd>
+      <dt>Modify</dt><dd>Projection eigenpairs <code>edsmrk</code>; angle subspace <code>edsangk</code>.</dd>
+      <dt>reference.py</dt><dd class="ref">eds_projection_sums() · mean_principal_angle()</dd>
+    </dl>
+  </div>
+
+  <div class="card anchor" id="ss" style="--edge:var(--blue)">
+    <div class="card-h"><span class="num">SS</span><span class="ttl">Self-stabilization mechanism</span>
+      <span class="keys"><span class="chip">enSS → ss</span><span class="chip">g_ss</span></span></div>
+    <dl class="rows">
+      <dt>What</dt><dd>Probes the self-stabilization picture: is the gradient of sharpness aligned with the top curvature direction (so GD self-corrects)? Uses the <b>preconditioned</b> Hessian H_P so it's meaningful for adaptive optimizers, not just GD.</dd>
+      <dt>Math</dt><dd class="math">H_P = P<sup>½</sup>∇²L P<sup>½</sup> (P = I / diag(1/|∇L|) / Muon-whiten / (JᵀJ)⁺), sharpness S = λmax(H_P), and <span class="eq">∇S = ∇³L[w,w,·] + 2(∂w/∂θ)ᵀ(∇²L w), w = P<sup>½</sup>u₁</span>. Four cosines: cos(∇S, top-k uᵢ) · cos(∇S, bottom-k) · cos(∇L−(u₁ᵀ∇L)u₁, ∇S) · cos(∇L−(ŝᵀ∇L)ŝ, u₁). <b>∇L is never preconditioned</b> — only the Hessian carries P.</dd>
+      <dt>Data→Draw</dt><dd><code>_selfstab_payload</code> (+ true ∇S via <code>_selfstab_gradS</code>) → <code>g_ss</code> {top, bot, p3, p4, approx} → <code>p_ss1..p_ss4</code>.</dd>
+      <dt>CE diff</dt><dd class="diff">Identical path; ∇²L simply carries CE curvature.</dd>
+      <dt>Modify</dt><dd>Eigvec count <code>ssk</code> (≤10); GN Jacobian size cap M≤256.</dd>
+      <dt>reference.py</dt><dd class="ref">selfstab_cosines() · grad_sharpness()</dd>
+    </dl>
+  </div>
+
+  <div class="card anchor" id="qspec" style="--edge:var(--blue)">
+    <div class="card-h"><span class="num">Q</span><span class="ttl">Q eigenspectrum — Q_r &amp; ΣQ_i over training</span>
+      <span class="keys"><span class="chip">enQspec → qspec</span><span class="chip">g_qspec</span><span class="chip"><b>★ full spectrum</b></span></span></div>
+    <dl class="rows">
+      <dt>What</dt><dd>Two side-by-side scree plots of the eigenvalues of Q_r = ΣₖrₖQₖ (residual-weighted) and H = ΣₖQₖ (unweighted) over training, with a slider to scrub to any past snapshot. <b>Now shows the full spectrum</b> for MLPs, not a top-80 sample.</dd>
+      <dt>Math</dt><dd class="math">For an MLP with p ≤ 20000, materialize each p×p operator exactly — <span class="eq">Σₐcₐ∇²fₐ = ∇²(f·c) = torch.func.hessian((f·c).sum())</span> — and take <code>eigvalsh</code> for <b>all p eigenvalues</b>. Larger p / non-MLP falls back to top⊕bottom-<code>qspeck</code> Lanczos. Throttled to ~60 snapshots (<code>qspecevery</code>), not every step. Scree: x = rank (desc), y = eigenvalue or <b>signed-log</b>.</dd>
+      <dt>Data→Draw</dt><dd><code>_qspec_full_eigs</code> → <code>g_qspec</code> {mr, h, p, full} → <code>p_qmr</code> (blue) / <code>p_qh</code> (teal); scrubber <code>qspecSnapPush/RenderNow</code>, signed-log toggle <code>qspec_slog</code>.</dd>
+      <dt>CE diff</dt><dd class="diff">Runs under CE; the Hessian is of the raw logits (function Hessian), not the CE Fisher. Same full-spectrum path.</dd>
+      <dt>Modify</dt><dd>Full-spectrum size cap <code>QSPEC_FULL_CAP=20000</code>; snapshot density <code>qspecevery</code>; fp64/fp32 eig threshold at p&gt;6000.</dd>
+      <dt>reference.py</dt><dd class="ref">qspec_full_eigs()</dd>
+    </dl>
+  </div>
+
+  <!-- ============================================================= INHERITED -->
+  <h2 class="anchor">Inherited diagnostics</h2>
+  <p>These come from the base widget and are documented here because they're wired into the prediction widgets' HTML and share the same J / r / M_r / NTK cast. But read the caveat first — most of them <b>do not actually run</b> on the prediction widget as shipped.</p>
+  <div class="note warn">
+    <span class="tag">Gated off by default</span>
+    The prediction widgets force <code>compute='gpu'</code> and then, in <code>currentQueryParams()</code> (~<code>index_prediction.html:5174</code>), apply an <b>ALLOW-list</b>: <code>{s1,s2,s3,s4,s5,s12,s14,s16,s17,s29,s35}</code> — every other section flag is forced to <code>'0'</code>. So of the inherited group, only <b>§6 (s29)</b> and <b>§7 (s35)</b> compute server-side; <b>§11, §12a, §12b, §18, §19, §20, §22, §23, §24, §25, §26, §13, §14 are OFF</b> even if you tick their checkbox. The parity sections (§13/§14/§19/§20/§6) can still appear via the in-browser recompute, but only on the non-GPU backend (MLP/synthetic) — which the prediction widget doesn't use. To actually see one of these on the prediction widget, add its flag to that ALLOW-list, or open the base <code>index.html</code>. The cards below describe what each computes <i>when enabled</i>.
+  </div>
+
+  <div class="card anchor" id="s11" style="--edge:var(--teal)">
+    <div class="card-h"><span class="num">11</span><span class="ttl">3D Hessian–NTK grids</span>
+      <span class="keys"><span class="chip">en18 → s18</span><span class="chip">g3d</span></span></div>
+    <dl class="rows">
+      <dt>What</dt><dd>Three N×N×N tensors over sample triples (i,j,k), rotatable in 3D with a training scrubber, showing how sample j's curvature couples samples i and k — progressively weighted by the top NTK eigenvector and the residual.</dd>
+      <dt>Math</dt><dd class="math"><span class="eq">T₁ = Jᵢᵀ Qⱼ Jₖ</span>, <span class="eq">T₂ = uⱼuₖ·T₁</span>, <span class="eq">T₃ = rᵢuⱼuₖ·T₁</span>; square S[i,j] = JᵢᵀQᵢJⱼ·rⱼ. u = top NTK eigvec.</dd>
+      <dt>Data→Draw</dt><dd><code>g3d</code> (sparse-packed, budget <code>G3D_MAXPTS=10000</code>) → <code>p_g3d1..4</code> + evolution strips.</dd>
+      <dt>Modify</dt><dd>Point budget <code>G3D_MAXPTS</code> (mirror in JS).</dd>
+      <dt>reference.py</dt><dd class="ref">sec11_grids()</dd>
+    </dl>
+  </div>
+
+  <div class="card anchor" id="s12a" style="--edge:var(--teal)">
+    <div class="card-h"><span class="num">12a</span><span class="ttl">Per-sample Hessian principal angles</span>
+      <span class="keys"><span class="chip">en19 → s19</span><span class="chip">g4d</span></span></div>
+    <dl class="rows">
+      <dt>What</dt><dd>Do different samples share curvature orientation? For each Qᵢ, take top-15⊕bottom-15 eigenpairs; heatmap the mean principal angle between Qᵢ,Qⱼ subspaces (0°=identical), and track its min/max/mean and same-rank alignment over training.</dd>
+      <dt>Math</dt><dd class="math">Eᵢ = [top-k; bottom-k] of Qᵢ; θᵢⱼ = arccos(svdvals(EᵢEⱼᵀ)), mean over angles. Diagonal alignment = mean<sub>i≠j</sub> (1/2k)Σₐ|⟨e<sub>i,a</sub>,e<sub>j,a</sub>⟩|.</dd>
+      <dt>Data→Draw</dt><dd><code>_sec12_payload</code> → <code>g4d.ang</code> → <code>p_s12ang_*, p_s12evo_*, p_s12dal_*</code>. (Also recomputed in-browser.)</dd>
+      <dt>Modify</dt><dd>Rank captured <code>SEC12_KFULL=15</code> (mirror in JS).</dd>
+      <dt>reference.py</dt><dd class="ref">sec12a_angles()</dd>
+    </dl>
+  </div>
+
+  <div class="card anchor" id="s12b" style="--edge:var(--teal)">
+    <div class="card-h"><span class="num">12b</span><span class="ttl">Projection panels</span>
+      <span class="keys"><span class="chip">en22 → s22</span><span class="chip">g4d</span></span></div>
+    <dl class="rows">
+      <dt>What</dt><dd>How each sample's gradient ∇fᵢ projects onto the leading eigenvectors of Qᵢ, extended from per-sample Qᵢ to the averaged ⟨Q⟩, NTK-/random-weighted averages, and cross-sample nearest/farthest eigenvector pairs (9 panels).</dd>
+      <dt>Math</dt><dd class="math">Per sample, rank rk: product = |⟨Jᵢ,u⟩|·σ·rᵢ; alignment = |⟨Jᵢ,u⟩|/‖Jᵢ‖ = |cos∠(Jᵢ,u)|. Panels 5–7 use weighted averages ⟨Q⟩<sub>w</sub> with w = |top NTK eigvec|, |2nd|, random.</dd>
+      <dt>Data→Draw</dt><dd><code>_sec12_payload</code> → <code>g4d</code> {proj, gproj, wproj, xproj} → <code>p_s12proj_*, p_s12wproj_*, p_s12xp_*</code>.</dd>
+      <dt>Modify</dt><dd>Ranks plotted <code>nrank=min(2,K)</code>; random-weight seed for panel 7.</dd>
+      <dt>reference.py</dt><dd class="ref">sec12b_proj()</dd>
+    </dl>
+  </div>
+
+  <div class="card anchor" id="s18" style="--edge:var(--teal)">
+    <div class="card-h"><span class="num">18</span><span class="ttl">Per-sample projections — sample 1 vs 2</span>
+      <span class="keys"><span class="chip">en26 → s26</span><span class="chip">g4d</span><span class="chip">N=2 only</span></span></div>
+    <dl class="rows">
+      <dt>What</dt><dd>The §12b product/alignment, but for sample 1 and sample 2 <b>separately</b> over training (not averaged), showing three "phases": alignment → power-iteration → residual-dominance. Only renders at exactly N=2.</dd>
+      <dt>Math</dt><dd class="math">Per sample, per rank: |⟨Jᵢ,u⟩|/‖Jᵢ‖ (phase 1) → |⟨Jᵢ,u⟩|·σ (phase 2) → |⟨Jᵢ,u⟩|·σ·rᵢ (phase 3).</dd>
+      <dt>Data→Draw</dt><dd>Reuses <code>_sec12_payload</code>'s per-sample arrays (<code>vbysamp/jbysamp/pbysamp</code>) → <code>p_s18_0..5</code>.</dd>
+      <dt>Modify</dt><dd>Phase definitions in <code>S18_PHASES</code> (JS).</dd>
+      <dt>reference.py</dt><dd class="ref">sec18_persample()</dd>
+    </dl>
+  </div>
+
+  <div class="card anchor" id="s6" style="--edge:var(--teal)">
+    <div class="card-h"><span class="num">6</span><span class="ttl">residual ↔ spectrum alignment</span>
+      <span class="keys"><span class="chip">en29 → s29</span><span class="chip">g21</span></span></div>
+    <dl class="rows">
+      <dt>What</dt><dd>How the residual r and the gradient J·r project onto the leading eigenvectors of the NTK and of M_r, over training (slider-scrubbed). Three operators: NTK, M_r, Gauss-Newton — each with bare cosine, raw inner product, and eigenvalue-weighted versions.</dd>
+      <dt>Math</dt><dd class="math">NTK (σᵢ,vᵢ): |⟨vᵢ,r⟩|/‖r‖ and ×σᵢ. M_r (λᵢ,uᵢ): |⟨uᵢ,J·r⟩|/‖J·r‖ and ×λᵢ. A "phases of learning" time-series accompanies it.</dd>
+      <dt>Data→Draw</dt><dd><code>_sec21_payload</code> → <code>g21</code> → <code>p_s21_b*/c*/ph*</code>. Recomputed in-browser too.</dd>
+      <dt>CE diff</dt><dd class="diff">Panel 3 (GN) uses the <b>Fisher</b> decomposition under CE; NTK/M_r panels stay plain.</dd>
+      <dt>reference.py</dt><dd class="ref">sec6_residual_spectrum_alignment()</dd>
+    </dl>
+  </div>
+
+  <div class="card anchor" id="s19" style="--edge:var(--teal)">
+    <div class="card-h"><span class="num">19</span><span class="ttl">gradient-norm change vs D²(NTK)</span>
+      <span class="keys"><span class="chip">en27 → s27</span><span class="chip">g19</span><span class="chip">MSE+GD only</span></span></div>
+    <dl class="rows">
+      <dt>What</dt><dd>Does the gradient norm start shrinking exactly when the NTK trace's discrete curvature turns negative? Overlays the one-step-ahead Δ‖gradient‖ with the centered 2nd difference of Tr(NTK).</dd>
+      <dt>Math</dt><dd class="math"><span class="eq">A = ‖J<sub>t+1</sub>ᵀr<sub>t+1</sub>‖ − ‖J<sub>t</sub>ᵀr<sub>t</sub>‖</span> (first-order GD prediction), <span class="eq">B = Tr(NTK)<sub>t+1</sub> − 2Tr<sub>t</sub> + Tr<sub>t−1</sub></span>. Plot 2 shows raw and normalized A−B.</dd>
+      <dt>Data→Draw</dt><dd><code>_sec19_payload</code> → <code>g19</code> {A, trNTK} → <code>p_s19_evo, p_s19_diff</code> (B formed client-side).</dd>
+      <dt>Modify</dt><dd>Normalization of B in JS; effective step <code>etaN=lr/N</code>.</dd>
+      <dt>reference.py</dt><dd class="ref">sec19_gradnorm_vs_D2NTK()</dd>
+    </dl>
+  </div>
+
+  <div class="card anchor" id="s20" style="--edge:var(--teal)">
+    <div class="card-h"><span class="num">20</span><span class="ttl">M_r spectral histograms</span>
+      <span class="keys"><span class="chip">en28 → s28</span><span class="chip">g20</span></span></div>
+    <dl class="rows">
+      <dt>What</dt><dd>Slider-scrubbed spectrum of M_r and how its eigenvectors align with the top-4 Jacobian directions. Panel 1 overlays bare eigenvalue λᵢ (grey) with λᵢ·|⟨vᵢ,uₖ⟩| (color); panel 2 is the bare alignment.</dd>
+      <dt>Math</dt><dd class="math">M_r top⊕bottom-K eigenpairs (λᵢ,vᵢ), ÷N. uₖ = k-th right-singular vector of J = normalize(Jᵀgₖ), gₖ = k-th NTK eigenvector. qₖ[i] = λᵢ·|⟨vᵢ,uₖ⟩|.</dd>
+      <dt>Data→Draw</dt><dd><code>_sec20_payload</code> → <code>g20</code> {lam, q1..q4} → <code>p_s20_b*/a*</code>. Recomputed in-browser too.</dd>
+      <dt>Modify</dt><dd>Eigenpairs/side <code>s28k</code>; # Jacobian directions (loop of 4).</dd>
+      <dt>reference.py</dt><dd class="ref">sec20_Mr_spectral_histogram()</dd>
+    </dl>
+  </div>
+
+  <div class="card anchor" id="s2223" style="--edge:var(--teal)">
+    <div class="card-h"><span class="num">22/23</span><span class="ttl">§20 on quadratic surrogates</span>
+      <span class="keys"><span class="chip">en30/en31 → s30/s31</span><span class="chip">g22/g23</span><span class="chip">MSE only</span></span></div>
+    <dl class="rows">
+      <dt>What</dt><dd>The exact §20 M_r content, but computed along a <b>quadratic-Taylor surrogate</b> trajectory instead of the real run. §22 freezes the network's 2nd-order Taylor at a chosen iteration; §23 replaces Q with a fixed low-rank random operator (a null model).</dd>
+      <dt>Math</dt><dd class="math">§22: f̃ₖ = fₖ(θ_t)+J<sub>t,k</sub>Δθ+½ΔθᵀQ<sub>t,k</sub>Δθ, M_r uses frozen Q_t. §23: Q[v] = Σ<sub>j≤R</sub> s<sub>j</sub>(ĝⱼᵀv)ĝⱼ scaled to λmax(∇²f)·scale. GD runs on the quadratic loss; the slider scrubs surrogate iterations.</dd>
+      <dt>Data→Draw</dt><dd><code>_quad_surrogate_main</code> → <code>g22</code>/<code>g23</code> (same §20 payload) → <code>p_s22_*/p_s23_*</code> via <code>makeS20Channel</code>. <b>Server-only</b>.</dd>
+      <dt>Modify</dt><dd>§22 freeze iter <code>s30t</code>; §23 rank/scale <code>s31r</code>/<code>s31scale</code>.</dd>
+      <dt>reference.py</dt><dd class="ref">sec22_23_surrogate_Mr()</dd>
+    </dl>
+  </div>
+
+  <div class="card anchor" id="s24" style="--edge:var(--teal)">
+    <div class="card-h"><span class="num">24</span><span class="ttl">first- vs second-order Δf alignment</span>
+      <span class="keys"><span class="chip">en32 → s32</span><span class="chip">g24 (in step)</span></span></div>
+    <dl class="rows">
+      <dt>What</dt><dd>Decomposes one GD step's change in each output fₖ into a first-order term A and a second-order term B, then tracks how each projects onto the residual and the top-4 NTK eigenvectors.</dd>
+      <dt>Math</dt><dd class="math"><span class="eq">A = J Jᵀ r</span> (NTK·r), <span class="eq">B<sub>k</sub> = (η/2N)(J·r)ᵀ Q<sub>k</sub> (J·r)</span>. Panels: ‖·‖, |cos(·,r)|, |cos(·,uᵢ)| for i=1..4.</dd>
+      <dt>Data→Draw</dt><dd>inline block → <code>g24</code> (embedded in the step record) {nA,nB,cAr,cBr,cAu,cBu,sig} → <code>p_s24_r*/u*</code>.</dd>
+      <dt>CE diff</dt><dd class="diff">Plain NTK in both — no Fisher switch; only r changes.</dd>
+      <dt>Modify</dt><dd>NTK eigvecs tracked <code>nu24=min(4,M)</code>; 2nd-order coeff <code>lr/(2N)</code>.</dd>
+      <dt>reference.py</dt><dd class="ref">sec24_first_vs_second_order_df()</dd>
+    </dl>
+  </div>
+
+  <div class="card anchor" id="s25" style="--edge:var(--teal)">
+    <div class="card-h"><span class="num">25</span><span class="ttl">d/dt(J·r) dynamics &amp; ∇θ cosines</span>
+      <span class="keys"><span class="chip">en33 → s33</span><span class="chip">g25</span></span></div>
+    <dl class="rows">
+      <dt>What</dt><dd>Splits d/dt(J·r) into its product-rule terms under gradient flow, and measures which parameter-space ∇θ directions of 7 scalar quantities move together (pairwise cosines). Plus residual-direction drift and magnitude.</dd>
+      <dt>Math</dt><dd class="math"><span class="eq">d/dt(J·r) = J̇·r + J·ṙ = −M_r∇L + JᵀJ∇L</span>. Seven vectors vᵢ = ∇θ of {‖r‖², ‖J‖²_F, ‖∇L‖², ‖Q(Jᵀr)‖², ‖JJᵀr‖², ‖f‖², ‖ġ‖²}; report cos∠(vᵢ,vⱼ).</dd>
+      <dt>Data→Draw</dt><dd>inline + <code>_sec25_cosines</code> (MLP only) → <code>g25</code> → <code>p_s25*, p_s25_cos*</code>.</dd>
+      <dt>Modify</dt><dd>Residual-drift lags tuple.</dd>
+      <dt>reference.py</dt><dd class="ref">sec25()</dd>
+    </dl>
+  </div>
+
+  <div class="card anchor" id="s26" style="--edge:var(--teal)">
+    <div class="card-h"><span class="num">26</span><span class="ttl">eigenvector-direction drift</span>
+      <span class="keys"><span class="chip">en34 → s34</span><span class="chip">g26</span></span></div>
+    <dl class="rows">
+      <dt>What</dt><dd>For the leading eigenvectors (tracked as continuous modes through crossings) of GN, NTK, and M_r, plots |cos| between the eigenvector now and k steps earlier — 1 = frozen direction, dips = rotation.</dd>
+      <dt>Math</dt><dd class="math"><span class="eq">|cos(vᵢ(t), vᵢ(t−k))|</span>, k ∈ {10,20,30,50,100}. gn = right-singular vec of J; ntk = left-singular vec; mrTop/mrBot = M_r eigvecs (blanked when |λ| ≤ 1e-6·λmax(NTK)).</dd>
+      <dt>Data→Draw</dt><dd><code>_sec26_eigvecs</code> + <code>_sec26_drift</code> (continuation via <code>_sec26_match</code>) → <code>g26</code> → <code>p_s26_*</code>.</dd>
+      <dt>CE diff</dt><dd class="diff">The GN track becomes the <b>Fisher</b> (own decomposition); MSE reuses NTK eigenpairs.</dd>
+      <dt>Modify</dt><dd>Drift lags; M_r blanking threshold <code>mtol</code>.</dd>
+      <dt>reference.py</dt><dd class="ref">sec26_drift()</dd>
+    </dl>
+  </div>
+
+  <div class="card anchor" id="s7" style="--edge:var(--teal)">
+    <div class="card-h"><span class="num">7</span><span class="ttl">∇θ 3D subspace over a sliding window</span>
+      <span class="keys"><span class="chip">en35 → s35</span><span class="chip">g27 / g27x</span><span class="chip">MLP only</span></span></div>
+    <dl class="rows">
+      <dt>What</dt><dd>Six ∇θ metric vectors are stacked over a sliding 101-step window; the window's top-3 singular directions define a local 3D subspace and the center vector is projected in (Viridis-colored by iteration). Plus a per-step cosine/norm panel with a preconditioned view for adaptive optimizers.</dd>
+      <dt>Math</dt><dd class="math">Metrics: ∇‖f‖², ∇‖r‖², ∇‖J‖²_F, ∇‖∇L‖², and discrete ∇‖ṙ‖², ∇‖J̇‖²_F. Window matrix A (p×W), Gram eigenpairs, coord = σⱼ·V<sub>center,j</sub>.</dd>
+      <dt>Data→Draw</dt><dd><code>_sec27_*</code> / <code>_Sec27State</code> (50-step lag) → <code>g27</code> pts + <code>g27x</code> per-step → <code>p_s27_*/p_s27c_*/p_s27x_*</code>. Server-only.</dd>
+      <dt>Modify</dt><dd>Window half-width <code>_SEC27_HALF=50</code>; # directions <code>_SEC27_TOP=3</code>.</dd>
+      <dt>reference.py</dt><dd class="ref">sec27_project()</dd>
+    </dl>
+  </div>
+
+  <div class="card anchor" id="s13" style="--edge:var(--teal)">
+    <div class="card-h"><span class="num">13</span><span class="ttl">approximating Jᵢᵀ Qⱼ Jₖ rₖ</span>
+      <span class="keys"><span class="chip">en21 → s21</span><span class="chip">g13</span><span class="chip">parity</span></span></div>
+    <dl class="rows">
+      <dt>What</dt><dd>For every sample triple (i,j,k), compares the exact HVP-based value Jᵢᵀ Qⱼ Jₖ rₖ against three rank-k₀ approximations built from the top⊕bottom eigenpairs of each Qᵢ. Mean±std clouds grouped by triple class, for k₀ ∈ {2,5}.</dd>
+      <dt>Math</dt><dd class="math">G₁/G₂/G₃ collapse the i-side and/or k-side onto the eigenbasis with cross-time cosine factors and (1 + rᵢ(η/N)σᵢ) residual-reweighting. Panel 4 = ‖A−B‖/‖A‖·100 asymmetry.</dd>
+      <dt>Data→Draw</dt><dd><code>_sec13_stats</code> → <code>g13</code> {ref, g1, g2, g3} → <code>p_s13_*</code>. <b>Also recomputed in-browser</b> (<code>sec13Stats</code>) — parity section.</dd>
+      <dt>Modify</dt><dd>Rank cutoffs <code>SEC13_KS=(2,5)</code>.</dd>
+      <dt>reference.py</dt><dd class="ref">sec13_G1() (sketch)</dd>
+    </dl>
+  </div>
+
+  <div class="card anchor" id="s14" style="--edge:var(--teal)">
+    <div class="card-h"><span class="num">14</span><span class="ttl">per-triplet decomposition of Tr(ΔNTK)</span>
+      <span class="keys"><span class="chip">en20 → s20</span><span class="chip">g14</span><span class="chip">parity</span></span></div>
+    <dl class="rows">
+      <dt>What</dt><dd>Decomposes Tr(ΔNTK) into per-(i,j,k) contributions, each a sum over eigen-mode pairs of a 5-factor product T = a·b·c·d·e. Panels show aggregates and the sub-products at the max/min mode, for ranks y ∈ {1,2,5}.</dd>
+      <dt>Math</dt><dd class="math">a = uᵢᵀuⱼ · b = σᵢ(Jᵢᵀuᵢ) · c = 1+(η/N)σⱼrⱼ · d = uⱼᵀJₖ · e = rₖ. Mixed time-indexing (see code).</dd>
+      <dt>Data→Draw</dt><dd><code>_sec14_payload</code> → <code>g14</code> {p14, ratio} → <code>p_s14_*</code>. <b>Also recomputed in-browser</b> (<code>sec14Payload</code>) — parity section.</dd>
+      <dt>Modify</dt><dd>Rank panels <code>SEC14_YS=(1,2,5)</code>.</dd>
+      <dt>reference.py</dt><dd class="ref">sec14_term() (sketch)</dd>
+    </dl>
+  </div>
+
+  <!-- ============================================================= MODIFY -->
+  <h2 id="modify" class="anchor">Modify cookbook</h2>
+  <p>The common shapes of change, and where each lives:</p>
+  <h3>Change what a plot shows (metric / axis)</h3>
+  <p>Find the section's compute function (the naming map's last column). Edit the math there, adjust the payload key, then update the matching <code>pushPoint</code> render line and the plot's axis title. If the section is a <b>parity</b> section (§13, §14, §19, §20, §6), make the identical change in the browser's <code>runLocal</code> mirror too, or captures and live runs will disagree.</p>
+  <h3>Add a whole new panel</h3>
+  <pre><span class="c"># server.py, inside run_stream's per-step block:</span>
+g_mine = None
+<span class="k-blue">if</span> mineflag <span class="k-blue">and</span> &lt;gate&gt;:
+    g_mine = {<span class="k-amber">"y"</span>: float(my_metric)}          <span class="c"># build the payload</span>
+<span class="c"># ...then add "g_mine": g_mine to the record dict (~line 5311+)</span>
+<span class="c"># parse the flag in _parse_params (~5950+): "mineflag": g("mineflag","0")=="1"</span></pre>
+  <pre><span class="c">// widget: add the DOM (a &lt;div id="p_mine" class="plot"&gt;), build it in initLivePlots,</span>
+<span class="c">// and render it in pushPoint:</span>
+<span class="k-blue">if</span>(D.g_mine){ extP(<span class="k-amber">'p_mine'</span>, {x:[[t]], y:[[D.g_mine.y]]}, [0]); }</pre>
+  <h3>Tune the Q-eigenspectrum</h3>
+  <p>Raise/lower the full-spectrum size limit at <code>QSPEC_FULL_CAP</code> (server.py ~1928) — above it, non-MLP and huge-p nets fall back to a top⊕bottom-<code>qspeck</code> sample. Snapshot density is <code>qspecevery</code> (0 ⇒ auto ≈60/run). For very large p the eig runs in fp32 (fast on GPU) above the p&gt;6000 threshold.</p>
+  <h3>Change a section toggle's behavior</h3>
+  <p>Remember the <a class="inline" href="#map">naming map</a>: the checkbox <code>enX</code> and server flag <code>sK</code> rarely share a number. Edit the browser serialization (<code>o['sK']=chk('enX')</code>), the server parse, and the <code>run_stream</code> gate. Several predictions force their flag to <code>'1'</code> so they always compute — the checkbox only hides the panel.</p>
+
+  <!-- ============================================================= REF PY -->
+  <h2 id="refpy" class="anchor">The runnable companion: reference_predictions.py</h2>
+  <p><code>reference_predictions.py</code> re-implements this math in plain autograd on a tiny MLP — no SSE, no Lanczos, no widget plumbing — so you can read each formula as one obvious block and experiment directly.</p>
+  <pre><span class="c"># train a tiny net and watch sharpness cross the EoS line:</span>
+python reference_predictions.py --steps 60 --width 24 --lr 0.05
+python reference_predictions.py --loss ce            <span class="c"># multiclass variant</span></pre>
+  <p>Its layout mirrors this guide: <b>Part 1</b> is the model / data / losses; <b>Part 2</b> is the core objects (<code>jacobian, residual, ntk, M_r, loss_hessian, sharpness, precond_half</code>); <b>Part 3</b> is one function per section (named in each card's <span class="ref">reference.py</span> row); <b>Part 4</b> is a demo loop. Start at <code>weighted_fn_hessian</code> — it's the identity from <a class="inline" href="#picture">§0</a> and nearly everything spectral is built on it.</p>
+
+  <footer>
+    <p><b>Caveats.</b> This guide is a map, not the territory: line numbers drift, so anchor on the named functions and DOM ids. The two widgets share one <code>server.py</code>; almost every MSE-vs-multiclass difference is a CE Fisher / natural-gradient switch keyed on <code>loss.name=="ce"</code>, or the residual definition r = onehot − softmax(f). When you change a <b>parity</b> section, change both the Python and the JS mirror.</p>
+    <p>Found something off, or want a section expanded? That's the point of this file — mark it up and send it back.</p>
+  </footer>
+</main>
+</div>

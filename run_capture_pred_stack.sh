@@ -26,6 +26,22 @@ MANIFEST=${MANIFEST:?set MANIFEST=/abs/path/to/manifest.txt (one eos_prediction*
 
 cd "$DIR"
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True   # reduce CUDA fragmentation OOM (esp. big convs / vgg)
+
+# PER-JOB scratch + torch caches. Without this, concurrently-started capture jobs SHARE the default cache dirs
+# (~/.cache/torch, /tmp) and race while initialising torch._dynamo/inductor — the first capture of each
+# simultaneously-launched job dies in ~4s with
+#   "torch._dynamo.compiled_autograd._disable ... AttributeError"
+# raised from the first torch.func transform (§27). That silently killed whole batches of captures while the
+# SLURM job still reported COMPLETED. run_serve_localhost.sh already isolates caches this way — the capture
+# path never did. Also keeps scratch off the (quota'd, sometimes full) node-local / and $HOME.
+SCRATCH="/nas/ucb/samsj/tmp/cap_${SLURM_JOB_ID:-$$}"
+mkdir -p "$SCRATCH"/{nv,inductor,triton,mpl}
+export TMPDIR="$SCRATCH"
+export CUDA_CACHE_PATH="$SCRATCH/nv"
+export TORCHINDUCTOR_CACHE_DIR="$SCRATCH/inductor"
+export TRITON_CACHE_DIR="$SCRATCH/triton"
+export MPLCONFIGDIR="$SCRATCH/mpl"
+
 mkdir -p runs_captured/logs
 
 echo "================================================================"

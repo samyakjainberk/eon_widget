@@ -206,6 +206,11 @@
       <div class="ctl"><label title="§12 sample cap: skip §12 when the number of samples N exceeds this. §12 extracts each sample's top-/bottom-15 Hessian eigenpairs MATRIX-FREE via Lanczos (no p×p matrix is formed), so it scales to large models like §1–§3; the grid is N×N so only N is capped.">§12 N-cap</label><input id="sec12ncap" type="number" value="500" min="1" max="600" step="1"></div>
       <div class="ctl"><label title="§11-§14 cube snapshot cadence: compute the N³ Hessian–NTK cubes (§11/§14) and the per-sample §12/§13 grids every k-th diagnostic tick instead of every tick. 1 = every tick (default). Raise it (e.g. 8) to keep long all-sections runs / captures small and fast — the N³ cubes dominate the file size; §15, §1-§9 and §16/§17 stay full-resolution.">cube cadence (every k)</label><input id="cubeevery" type="number" value="1" min="1" max="200" step="1"></div>
       <div class="ctl"><label>SLQ probes</label><input id="slqprobes" type="number" value="4" min="1" max="12" step="1"></div>
+      <div class="ctl"><label>SLQ mode (spectra)</label><select id="slqblock" title="Stochastic Lanczos Quadrature for the H / G / S / loss-Hessian spectral-density plots. 'block SLQ (b=4)' is the DEFAULT — block Lanczos advancing 4 probe vectors together resolves clustered/degenerate eigenvalues with markedly lower variance / closer-to-true density at the same iteration count (validated as the accuracy-per-matvec sweet spot vs exact eig). 'standard' = single-vector SLQ (b=1).">
+        <option value="1">standard SLQ</option>
+        <option value="2">block SLQ (b=2)</option>
+        <option value="4" selected>block SLQ (b=4)</option>
+        <option value="8">block SLQ (b=8)</option></select></div>
       <div class="ctl"><label>subspace energy %</label><input id="energyp" type="number" value="99" min="50" max="100" step="1"></div>
       <div class="ctl"><label>G &amp; S spectra</label><select id="gson"><option value="1" selected>on</option><option value="0">off</option></select></div>
       <div class="ctl"><label>every_iter_quadric_approx</label><input id="qapprox" type="number" value="25" min="10" max="2000" step="10"></div>
@@ -1072,9 +1077,59 @@ function computeFHfrozen(th,spec,X,N,inDim,p,eps,nProbe,n7,nM,mV,M){
   return {gamma,yv,zz,tt};
 }
 
-function slqDensity(hvpFn,p,nProbe,m,nGrid,seed){
+// modified Gram-Schmidt (two-pass, for stability) QR of b column-vectors → {Q:[b orthonormal vecs], R:(b×b upper)}
+// mirrors torch.linalg.qr used by server._block_lanczos_core (statistically equivalent; not byte-identical RNG).
+function _mgsBlock(cols,p,b){
+  const Q=[],R=new Float64Array(b*b);
+  for(let j=0;j<b;j++){
+    const v=Float64Array.from(cols[j]);
+    for(let pass=0;pass<2;pass++)for(let i=0;i<j;i++){const r=dot(Q[i],v);R[i*b+j]+=r;for(let q=0;q<p;q++)v[q]-=r*Q[i][q];}
+    let nrm=0;for(let q=0;q<p;q++)nrm+=v[q]*v[q];nrm=Math.sqrt(nrm);R[j*b+j]=nrm;
+    const qj=new Float64Array(p);if(nrm>1e-300)for(let q=0;q<p;q++)qj[q]=v[q]/nrm;
+    Q.push(qj);
+  }
+  return {Q,R};
+}
+// BLOCK Lanczos (block size b) — JS port of server._block_lanczos_core. Three-term block recurrence with full
+// reorthogonalization; returns the symmetric block-tridiagonal T (kb×kb) whose eigenpairs are the block-SLQ nodes.
+function blockLanczosCore(hvpFn,p,b,m,seed){
+  b=Math.max(1,Math.min(b,p));
+  const start=[];for(let c=0;c<b;c++)start.push(randVec(p,(seed+c*2654435761)>>>0));
+  let {Q:Qj}=_mgsBlock(start,p,b);
+  const Qblocks=[],A=[],B=[];let Qprev=null,Bprev=null;
+  const kmax=Math.min(Math.max(1,Math.floor(p/b)),m);
+  for(let it=0;it<kmax;it++){
+    Qblocks.push(Qj);
+    const W=[];for(let c=0;c<b;c++)W.push(hvpFn(Qj[c]));                    // A·Q_j (b single-vector HVPs)
+    const As=new Float64Array(b*b);
+    for(let i=0;i<b;i++)for(let j=0;j<b;j++){const aij=dot(Qj[i],W[j]),aji=dot(Qj[j],W[i]);As[i*b+j]=0.5*(aij+aji);}  // symmetric diagonal block A_j
+    A.push(As);
+    for(let j=0;j<b;j++){const wj=W[j];for(let i=0;i<b;i++){const a=As[i*b+j],qi=Qj[i];for(let q=0;q<p;q++)wj[q]-=a*qi[q];}}          // W -= Q_j A_j
+    if(Qprev)for(let j=0;j<b;j++){const wj=W[j];for(let i=0;i<b;i++){const bb=Bprev[j*b+i],qi=Qprev[i];for(let q=0;q<p;q++)wj[q]-=bb*qi[q];}}   // W -= Q_{j-1} B_{j-1}ᵀ
+    for(let pass=0;pass<2;pass++)for(const Qc of Qblocks)for(let j=0;j<b;j++){const wj=W[j];for(let i=0;i<b;i++){const c=dot(Qc[i],wj);for(let q=0;q<p;q++)wj[q]-=c*Qc[i][q];}}  // full reorth (twice)
+    const {Q:Qnext,R:Bj}=_mgsBlock(W,p,b);B.push(Bj);
+    let mx=0;for(let i=0;i<b*b;i++)mx=Math.max(mx,Math.abs(Bj[i]));
+    if(mx<1e-10)break;
+    Qprev=Qj;Bprev=Bj;Qj=Qnext;
+  }
+  const k=A.length,kb=k*b;const T=new Float64Array(kb*kb);
+  for(let i=0;i<k;i++){
+    for(let r=0;r<b;r++)for(let c=0;c<b;c++)T[(i*b+r)*kb+(i*b+c)]=A[i][r*b+c];
+    if(i<k-1)for(let r=0;r<b;r++)for(let c=0;c<b;c++){T[((i+1)*b+r)*kb+(i*b+c)]=B[i][r*b+c];T[(i*b+c)*kb+((i+1)*b+r)]=B[i][r*b+c];}
+  }
+  return {T,kb,b};
+}
+function slqDensity(hvpFn,p,nProbe,m,nGrid,seed,block){
+  block=Math.max(1,(block|0)||1);
   const TH=[],W=[];
-  for(let pr=0;pr<nProbe;pr++){
+  if(block>1){
+    const mBlk=Math.min(Math.max(1,Math.floor(p/block)),m);
+    for(let pr=0;pr<nProbe;pr++){
+      const {T,kb,b}=blockLanczosCore(hvpFn,p,block,mBlk,(seed+pr*1315423)>>>0);
+      const {vals,V}=jacobiEig(T,kb);
+      for(let i=0;i<kb;i++){let w=0;for(let j=0;j<b;j++){const vj=V[j*kb+i];w+=vj*vj;}TH.push(vals[i]);W.push(w/(b*nProbe));}   // ‖first b-block of eigvec i‖²
+    }
+  }else for(let pr=0;pr<nProbe;pr++){
     const {Q,k,T}=lanczosCore(hvpFn,p,Math.min(p,m),randVec(p,(seed+pr*1315423)>>>0));
     const {vals,V}=jacobiEig(T,k);
     for(let i=0;i<k;i++){TH.push(vals[i]);const w0=V[0*k+i];W.push(w0*w0/nProbe);}
@@ -3892,7 +3947,7 @@ async function runLocal(preview){                       // BROWSER mode: fresh s
   const g3dStride=Math.max(1,+val('cubeevery')||1);   // §11-§14 cube cadence: emit every k-th tick (mirror server cubeevery/g3dstride); §15/§1-9/§16-17 stay per-tick
   const s28k=Math.max(1,Math.floor(+val('s28k')||40));   // §20: # eigenpairs per side (top-K ⊕ bottom-K) of M_r
   const s29k=Math.max(1,Math.floor(+val('s29k')||40));   // §21: NTK top-K & M_r top-K⊕bottom-K
-  ST={opt,optim:val('optimizer'),spec,p,X,Y,N,inDim,outDim,M,nResid,th,lr,eps,thr,n,kth,nSub,mF,mV,mSLQ,nProbe,efrac,eigEvery,slqStride,heavyEvery,grid3dcap,divreg:Math.max(0,+val('divreg')||0.3),sec12ncap:Math.max(1,+val('sec12ncap')||500),g3dStride,s28k,s29k,steps,posIdx,negIdx,
+  ST={opt,optim:val('optimizer'),spec,p,X,Y,N,inDim,outDim,M,nResid,th,lr,eps,thr,n,kth,nSub,mF,mV,mSLQ,nProbe,slqBlock:Math.max(1,+val('slqblock')||4),efrac,eigEvery,slqStride,heavyEvery,grid3dcap,divreg:Math.max(0,+val('divreg')||0.3),sec12ncap:Math.max(1,+val('sec12ncap')||500),g3dStride,s28k,s29k,steps,posIdx,negIdx,
       needVecs,needVals,prevTop:Array(nSub).fill(null),prevBot:Array(nSub).fill(null),prevPos:null,prevNeg:null,
       pNtk:Array(n).fill(null),pVH:Array(n).fill(null),pUJ:Array(n).fill(null),pM1:[null,null,null,null],pM2:[null,null,null,null],pG2:Array(n).fill(null),
       prevSharp7a:null,prevNtkR7a:null,prevPrevNtkR7a:null,sumGsync:null,sumGlag:null,cntGs:0,cntGl:0,   // §7a Δλ·Δr running products
@@ -4430,10 +4485,11 @@ async function loop(){                                   // drives ST forward; r
           paPos,paNeg,ntkR,ntkH,ntkGs,ntkGsA,ntkGl,ntkGlA,fhEvT,fhEvB,jhe1,jhe2,jhe1b,jhe2b,jh2e1,jh2e2,jh2e1b,jh2e2b,g2J,g2Jn,
           q9t,q9b,q9tN,q9bN,q9tR,q9bR,q9gt,q9gb,q10,q10N},S.n,S.kth,S.nResid);
         if(O.s5&&S.eigTick%S.slqStride===0){
-          {const dH=slqDensity(v=>hvpF(S.th,spec,X,N,inDim,p,v,eps),p,S.nProbe,S.mSLQ,80,0x11);
-           const dG=slqDensity(v=>hvpG(S.th,spec,X,N,inDim,p,v,eps),p,S.nProbe,S.mSLQ,80,0x22);
-           const dS=slqDensity(v=>hvpS(S.th,spec,X,N,inDim,p,v,eps,cS),p,S.nProbe,S.mSLQ,80,0x33);
-           const dHL=slqDensity(v=>hvpL(S.th,spec,X,Y,N,inDim,p,v,eps),p,S.nProbe,S.mSLQ,80,0x44);
+          {const bk=S.slqBlock||1;
+           const dH=slqDensity(v=>hvpF(S.th,spec,X,N,inDim,p,v,eps),p,S.nProbe,S.mSLQ,80,0x11,bk);
+           const dG=slqDensity(v=>hvpG(S.th,spec,X,N,inDim,p,v,eps),p,S.nProbe,S.mSLQ,80,0x22,bk);
+           const dS=slqDensity(v=>hvpS(S.th,spec,X,N,inDim,p,v,eps,cS),p,S.nProbe,S.mSLQ,80,0x33,bk);
+           const dHL=slqDensity(v=>hvpL(S.th,spec,X,Y,N,inDim,p,v,eps),p,S.nProbe,S.mSLQ,80,0x44,bk);
            slqSnapPush({t:t,sH:dH,sG:dG,sS:dS,sHL:dHL,p:p});}   // §5 scree → per-tick history (scrubber)
           const ntr=Math.max(S.nProbe,4);   // §5 trace-over-iterations (Hutchinson)
           trPush({t:S.t,trH:hutchTrace(v=>hvpF(S.th,spec,X,N,inDim,p,v,eps),p,ntr,0x51)/N,

@@ -1,0 +1,726 @@
+<meta charset="utf-8">
+<style>
+:root{
+  --bg:#f5f6fb; --panel:#ffffff; --panel2:#fafbff; --ink:#171c28; --muted:#5a6478; --faint:#8b93a6;
+  --line:#e4e7f1; --grid:#eef1f8; --accent:#4f6fd4; --accent2:#8b5cf6;
+  --p1:#0f9d8f; --p2:#d98a17; --p3:#e0559a; --sharp:#3b6fd4; --amber:#d98a17; --good:#0f9d8f; --bad:#dc5b52;
+  --shadow:0 1px 2px rgba(20,30,55,.05),0 8px 30px rgba(20,30,55,.07);
+  --mono:ui-monospace,"SF Mono","JetBrains Mono","Cascadia Code",Menlo,Consolas,monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Times New Roman",serif;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#0c0f16; --panel:#141926; --panel2:#10141f; --ink:#e7ecf6; --muted:#9aa4b8; --faint:#6a7488;
+  --line:#232b3b; --grid:#1a2130; --accent:#7d9bf2; --accent2:#a78bfa;
+  --p1:#2dd4bf; --p2:#e0a341; --p3:#ec6aa8; --sharp:#6f9bf0; --amber:#e0a341; --good:#2dd4bf; --bad:#f0776d;
+  --shadow:0 1px 2px rgba(0,0,0,.32),0 10px 34px rgba(0,0,0,.4);
+}}
+:root[data-theme="dark"]{
+  --bg:#0c0f16; --panel:#141926; --panel2:#10141f; --ink:#e7ecf6; --muted:#9aa4b8; --faint:#6a7488;
+  --line:#232b3b; --grid:#1a2130; --accent:#7d9bf2; --accent2:#a78bfa;
+  --p1:#2dd4bf; --p2:#e0a341; --p3:#ec6aa8; --sharp:#6f9bf0; --amber:#e0a341; --good:#2dd4bf; --bad:#f0776d;
+  --shadow:0 1px 2px rgba(0,0,0,.32),0 10px 34px rgba(0,0,0,.4);
+}
+:root[data-theme="light"]{
+  --bg:#f5f6fb; --panel:#ffffff; --panel2:#fafbff; --ink:#171c28; --muted:#5a6478; --faint:#8b93a6;
+  --line:#e4e7f1; --grid:#eef1f8; --accent:#4f6fd4; --accent2:#8b5cf6;
+  --p1:#0f9d8f; --p2:#d98a17; --p3:#e0559a; --sharp:#3b6fd4; --amber:#d98a17; --good:#0f9d8f; --bad:#dc5b52;
+  --shadow:0 1px 2px rgba(20,30,55,.05),0 8px 30px rgba(20,30,55,.07);
+}
+*{box-sizing:border-box}
+body{margin:0}
+.wrap{max-width:1060px;margin:0 auto;padding:40px 22px 90px;color:var(--ink);
+  font-family:var(--sans);background:var(--bg);min-height:100vh;font-size:14.5px;line-height:1.62}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;
+  color:var(--accent);font-weight:600;margin:0 0 12px}
+h1{font-family:var(--serif);font-size:38px;line-height:1.1;margin:0 0 14px;font-weight:600;letter-spacing:-.01em;text-wrap:balance}
+h1 em{font-style:italic;color:var(--accent)}
+.dek{color:var(--muted);max-width:70ch;margin:0 0 8px;font-size:16px;line-height:1.6}
+h2{font-family:var(--serif);font-size:23px;margin:0 0 4px;font-weight:600;letter-spacing:-.005em;text-wrap:balance}
+h3{font-size:13px;margin:0 0 3px;font-weight:640;color:var(--ink)}
+.qtag{font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--accent);padding:3px 9px;border:1px solid color-mix(in srgb,var(--accent) 40%,transparent);
+  border-radius:20px;display:inline-block;margin-bottom:10px}
+.lede{color:var(--muted);margin:8px 0 20px;max-width:74ch}
+.lede b,.dek b,p b{color:var(--ink);font-weight:620}
+section{margin:0 0 44px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);
+  padding:22px 22px 18px;margin-bottom:20px}
+.rule{height:1px;background:linear-gradient(90deg,var(--line),transparent);margin:30px 0}
+
+/* hero cycle ring */
+.hero{display:grid;grid-template-columns:1.35fr .9fr;gap:26px;align-items:center;margin:14px 0 8px}
+@media(max-width:760px){.hero{grid-template-columns:1fr}}
+.ring-wrap{display:flex;flex-direction:column;align-items:center;gap:10px}
+.ring-cap{font-family:var(--mono);font-size:10.5px;color:var(--faint);text-align:center;letter-spacing:.03em}
+
+/* phase chips */
+.phases{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 2px}
+.phase{flex:1 1 150px;border:1px solid var(--line);border-radius:11px;padding:11px 13px;background:var(--panel2);
+  border-left-width:3px}
+.phase .pn{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
+.phase .pt{font-weight:640;font-size:13.5px;margin:2px 0 3px}
+.phase .pd{font-size:12px;color:var(--muted);line-height:1.5}
+.phase.p1{border-left-color:var(--p1)} .phase.p1 .pt{color:var(--p1)}
+.phase.p2{border-left-color:var(--p2)} .phase.p2 .pt{color:var(--p2)}
+.phase.p3{border-left-color:var(--p3)} .phase.p3 .pt{color:var(--p3)}
+
+/* run explorer */
+.chips{display:flex;gap:7px;flex-wrap:wrap;margin:4px 0 14px}
+.chip{font-family:var(--mono);font-size:11.5px;padding:6px 11px;border-radius:8px;border:1px solid var(--line);
+  background:var(--panel2);color:var(--muted);cursor:pointer;transition:all .12s;user-select:none}
+.chip:hover{border-color:var(--accent);color:var(--ink)}
+.chip[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+.runmeta{font-family:var(--mono);font-size:12px;color:var(--muted);margin:2px 0 14px;
+  padding:9px 13px;background:var(--panel2);border:1px solid var(--line);border-radius:9px;
+  border-left:3px solid var(--accent2)}
+.runmeta b{color:var(--ink)}
+
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:15px}
+@media(max-width:680px){.grid2{grid-template-columns:1fr}}
+.mini{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:13px 13px 9px}
+.mini .cap{font-family:var(--mono);font-size:10.5px;color:var(--faint);margin:1px 0 8px;letter-spacing:.01em}
+.plot{position:relative;width:100%}
+canvas{display:block;width:100%;touch-action:none}
+.mini canvas{height:176px}
+.big canvas{height:300px}
+.leg{display:flex;gap:12px;flex-wrap:wrap;font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:7px}
+.leg span{display:inline-flex;align-items:center;gap:5px}
+.leg i{width:15px;height:3px;border-radius:2px;display:inline-block}
+.leg i.dash{background:repeating-linear-gradient(90deg,currentColor 0 4px,transparent 4px 7px)}
+.tip{position:absolute;pointer-events:none;background:var(--panel);border:1px solid var(--line);
+  border-radius:8px;padding:6px 9px;font-family:var(--mono);font-size:11px;color:var(--ink);
+  box-shadow:var(--shadow);opacity:0;transition:opacity .08s;white-space:nowrap;z-index:6;line-height:1.5}
+.tip .tk{color:var(--faint)}
+
+/* takeaway callouts */
+.take{display:flex;gap:11px;align-items:flex-start;margin:14px 0 2px;padding:13px 15px;
+  background:color-mix(in srgb,var(--accent) 7%,var(--panel));border:1px solid color-mix(in srgb,var(--accent) 26%,var(--line));
+  border-radius:11px}
+.take .mk{font-family:var(--mono);font-weight:700;color:var(--accent);flex:0 0 auto;font-size:12px;
+  margin-top:1px;letter-spacing:.05em}
+.take .tx{font-size:13.5px;color:var(--ink);line-height:1.55}
+.take .tx b{font-weight:660}
+
+/* data table */
+table{border-collapse:collapse;width:100%;font-family:var(--mono);font-size:12px;margin:6px 0}
+th,td{text-align:right;padding:7px 10px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}
+th:first-child,td:first-child{text-align:left}
+th{color:var(--faint);font-weight:600;letter-spacing:.03em;border-bottom-color:var(--muted)}
+td.good{color:var(--good);font-weight:600} td.bad{color:var(--bad);font-weight:600} td.mid{color:var(--amber)}
+
+/* regime tag on chips + table cells */
+.rtag{font-family:var(--mono);font-size:9.5px;padding:1px 6px;border-radius:20px;margin-left:7px;
+  vertical-align:middle;font-weight:600;letter-spacing:.02em}
+.rt-subcritical{background:color-mix(in srgb,var(--good) 20%,transparent);color:var(--good)}
+.rt-damped-burst{background:color-mix(in srgb,var(--sharp) 20%,transparent);color:var(--sharp)}
+.rt-intermittent{background:color-mix(in srgb,var(--p2) 22%,transparent);color:var(--p2)}
+.rt-persistent{background:color-mix(in srgb,var(--p3) 20%,transparent);color:var(--p3)}
+.rt-muP{background:color-mix(in srgb,var(--accent2) 22%,transparent);color:var(--accent2)}
+td.cgood{color:var(--good);font-weight:600} td.cbad{color:var(--bad);font-weight:600} td.cmid{color:var(--amber);font-weight:600}
+
+/* per-dataset cards */
+.dscard{background:var(--panel);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);
+  padding:20px 22px 18px;margin-bottom:20px}
+.dscard .dshead{display:flex;align-items:baseline;gap:11px;flex-wrap:wrap;margin-bottom:3px}
+.dscard .dshead h3{font-family:var(--serif);font-size:22px;font-weight:600;margin:0}
+.dscard .dstag{font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:.05em;padding:2px 9px;
+  border-radius:20px;background:color-mix(in srgb,var(--accent2) 16%,transparent);color:var(--accent2)}
+.dscard .dsid{font-family:var(--mono);font-size:11.5px;color:var(--faint);width:100%;margin-top:1px}
+.dscard .dschar{color:var(--muted);font-size:13.5px;line-height:1.6;margin:10px 0 14px;max-width:80ch}
+.dscard .dschar b{color:var(--ink);font-weight:620}
+.dsgrid2{display:grid;grid-template-columns:1.55fr 1fr;gap:18px;align-items:start}
+@media(max-width:760px){.dsgrid2{grid-template-columns:1fr}}
+.dstable table{font-size:11.5px}
+.dstable th,.dstable td{padding:5px 8px}
+.dstheory{background:var(--panel2);border:1px solid var(--line);border-radius:11px;padding:13px 15px}
+.dstheory .th-h{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;color:var(--faint);text-transform:uppercase;margin-bottom:9px}
+.dstheory .th-row{display:flex;justify-content:space-between;align-items:baseline;padding:5px 0;border-bottom:1px solid var(--line);font-size:12.5px}
+.dstheory .th-row:last-child{border-bottom:none}
+.dstheory .th-row .lab{color:var(--muted)}
+.dstheory .th-row .val{font-family:var(--mono);font-weight:600;font-variant-numeric:tabular-nums}
+.dsfig details{margin-top:14px}
+.dsfig summary{font-family:var(--mono);font-size:11.5px;color:var(--accent);cursor:pointer;user-select:none;padding:4px 0}
+.dsfig summary:hover{text-decoration:underline}
+.dsfig .fimg2{background:#fff;padding:8px;border:1px solid var(--line);border-radius:10px;margin-top:8px}
+.dsfig .fimg2 img{width:100%;display:block;border-radius:4px}
+td.rlab{text-align:left}
+
+/* diagnostic-grid gallery */
+.gallery{display:flex;flex-direction:column;gap:16px;margin-top:8px}
+.figc{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden;box-shadow:var(--shadow)}
+.figc .fh{padding:13px 16px 11px;border-bottom:1px solid var(--line);display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.figc .fh h3{font-size:15px;font-weight:640;margin:0}
+.figc .fh .fs{font-family:var(--mono);font-size:11px;color:var(--faint)}
+.figc .fimg{background:#fff;padding:8px}
+.figc .fimg img{width:100%;display:block;border-radius:4px}
+.figc .frd{padding:12px 16px 14px;font-size:13px;color:var(--muted);line-height:1.55}
+.figc .frd b{color:var(--ink);font-weight:620}
+.galhint{font-family:var(--mono);font-size:11px;color:var(--faint);margin:2px 0 4px}
+
+/* observations */
+.obs{counter-reset:obs}
+.ob{margin:0 0 18px;padding:0 0 0 46px;position:relative}
+.ob::before{counter-increment:obs;content:"O" counter(obs);position:absolute;left:0;top:1px;
+  font-family:var(--mono);font-size:12px;font-weight:700;color:var(--accent);
+  background:color-mix(in srgb,var(--accent) 12%,transparent);border-radius:7px;padding:3px 6px}
+.ob h4{margin:0 0 4px;font-size:15px;font-weight:640;color:var(--ink)}
+.cbadge{font-family:var(--mono);font-size:9.5px;font-weight:600;letter-spacing:.04em;padding:2px 7px;border-radius:20px;
+  vertical-align:middle;margin-left:6px;white-space:nowrap}
+.cb-solid{background:color-mix(in srgb,var(--good) 18%,transparent);color:var(--good)}
+.cb-tent{background:color-mix(in srgb,var(--amber) 20%,transparent);color:var(--amber)}
+.ob p{margin:0;color:var(--muted);font-size:13.5px;line-height:1.6}
+.ob p b{color:var(--ink)}
+kbd{font-family:var(--mono);font-size:.86em;background:var(--grid);color:var(--ink);padding:1px 5px;border-radius:4px;
+  border:1px solid var(--line)}
+.foot{color:var(--faint);font-family:var(--mono);font-size:11px;margin-top:34px;line-height:1.75;
+  border-top:1px solid var(--line);padding-top:18px}
+.foot b{color:var(--muted)}
+.themebtn{position:fixed;top:14px;right:16px;font-family:var(--mono);font-size:11px;padding:6px 10px;border-radius:8px;
+  border:1px solid var(--line);background:var(--panel);color:var(--muted);cursor:pointer;z-index:20}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+
+<button class="themebtn" id="themebtn" aria-label="Toggle light or dark theme">◐ theme</button>
+<div class="wrap">
+
+  <p class="eyebrow">Progressive sharpening · Edge of Stability · phases of learning</p>
+  <h1>Does the sharpening cycle <em>repeat</em>?</h1>
+  <p class="dek">A study of <b>205 captured runs</b> asking two questions about full-batch gradient descent at
+    <b>standard initialization</b>: <b>(Q1)</b> what actually happens as the loss Hessian sharpens, and
+    <b>(Q2)</b> whether the <b>align → power-iterate → residual-dominance</b> cycle from the prediction-widget
+    theory runs <em>once</em> or <em>over and over</em>. Analyzed one dataset at a time, the six tasks turn out to be
+    six different systems — and the Prediction-3/4/5 theory is <em>exact</em> on the low-rank ones (ksparse) and
+    fails on the rich ones (cifar), for two separable reasons.</p>
+
+  <div class="hero">
+    <div>
+      <div class="phases">
+        <div class="phase p1"><div class="pn">Phase 1</div><div class="pt">Alignment</div>
+          <div class="pd">The GN-gradient Jᵀr rotates into the top eigenvector u₁ of the residual-weighted
+          curvature M<sub>r</sub>=Σr<sub>k</sub>Q<sub>k</sub>. Measured by cos(∇L, u₁)→1.</div></div>
+        <div class="phase p2"><div class="pn">Phase 2</div><div class="pt">Power iteration</div>
+          <div class="pd">Once aligned, GD amplifies that direction: ‖Jᵀr‖ and the top NTK eigenvalue
+          λ₁(JJᵀ) grow — sharpness climbs toward the 2/η Edge-of-Stability line.</div></div>
+        <div class="phase p3"><div class="pn">Phase 3</div><div class="pt">Residual dominance</div>
+          <div class="pd">Curvature growth ‖J̇·r‖ overtakes NTK decay ‖J·ṙ‖; the residual collapses along
+          u₁. A <em>new</em> dominant direction emerges — and Phase 1 begins again.</div></div>
+      </div>
+    </div>
+    <div class="ring-wrap">
+      <canvas id="ring" width="360" height="300" style="width:290px;height:242px"></canvas>
+      <div class="ring-cap">one turn of the cycle · each repeat re-anchors<br>on a fresh top-M<sub>r</sub> eigenvector</div>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-top:8px"><h3 style="font-size:15px">Everything, in ten lines</h3>
+    <ol style="margin:8px 0 2px;padding-left:20px;color:var(--muted);font-size:13.5px;line-height:1.65">
+      <li><b>Standard init starts you on the Edge.</b> Kaiming begins with sharpness at median 0.90×2/η (half of runs above it); small-scale inits (muP, default) start at 0.15–0.21× and often never reach the Edge. That is why sharpening/EoS/the cycle are standard-init phenomena.</li>
+      <li><b>2/η is an attractor</b> reached two ways: kaiming from above (pulled down), muP from below (sharpened up).</li>
+      <li><b>Each task has a curvature ceiling</b> — ksparse ~12, saddle ~19, images &gt;100 — and reaches EoS only when 2/η drops below it. mnist's is so high that kaiming <b>diverges</b> at η=0.12.</li>
+      <li><b>The align→power→dominance cycle repeats.</b> Turn count rises with η (kaiming mean 3→12) then collapses at η=0.5; it is <b>seed-noisy</b> (spreads of 8–11), so only the trend is robust.</li>
+      <li><b>Two clocks:</b> a period-2 EoS bounce within one direction, and a slow (8–56× slower) switch to new directions.</li>
+      <li><b>The six datasets behave like six different systems</b> — the pooled average is misleading; see the per-dataset cards.</li>
+      <li><b>Theory, axis 1 — direction</b> (which direction sharpens) is set by curvature <b>rank</b>: predicted near-perfectly on ksparse/chebyshev/saddle, lost on cifar.</li>
+      <li><b>Theory, axis 2 — magnitude</b> (how fast it sharpens) is set by curvature <b>growth</b>: exact on ksparse/saddle, exploding on chebyshev/cifar. The <b>trace</b> is the one thing predictable everywhere.</li>
+      <li><b>Q, three ways:</b> freezing the curvature Q at init keeps the sharpening <b>direction</b> (correlation 0.96–0.99) but drifts the scale; a random Q fails (zero gradient alignment). A follow-up test shows a random <b>low-rank</b> Q also fails — so it is the specific <b>direction</b>, not merely being low-rank, that matters.</li>
+      <li><b>The punchline:</b> progressive sharpening is the errors repeatedly amplifying <b>a few specific curvature directions that already exist at initialization</b> — the ones lined up with the gradient. The theory is exact when there are few such directions (ksparse) and fails when there are many (cifar).</li>
+    </ol></div>
+
+  <div class="rule"></div>
+
+  <!-- Q1 -->
+  <section id="q1">
+    <span class="qtag">Question 1 · the standard-init case</span>
+    <h2>Sharpness converges to 2/η and pins there — from above or below</h2>
+    <p class="lede">Every standard-init run, across chebyshev / saddle / ksparse / mnist / cifar and across MLP &
+      VGG, does the same thing: the loss-Hessian sharpness λ₁(∇²L) is drawn to the <b>2/η Edge-of-Stability
+      line</b> and stays pinned to it while the loss keeps falling <b>non-monotonically</b>. Whether sharpening
+      <em>rises into</em> 2/η (small η) or the instability <em>pulls it down into</em> 2/η (large η), the
+      attractor is the same. Pick a run:</p>
+
+    <div class="chips" id="runChips"></div>
+    <div class="runmeta" id="runMeta"></div>
+
+    <div class="grid2">
+      <div class="mini"><h3>Training loss</h3><p class="cap">MSE · log scale · falls non-monotonically under EoS</p>
+        <div class="plot"><canvas id="c_loss"></canvas><div class="tip" id="t_loss"></div></div></div>
+      <div class="mini"><h3>Hessian sharpness λ₁(∇²L) vs 2/η</h3><p class="cap">the Edge-of-Stability line is the attractor</p>
+        <div class="plot"><canvas id="c_sharp"></canvas><div class="tip" id="t_sharp"></div></div>
+        <div class="leg"><span style="color:var(--sharp)"><i style="background:var(--sharp)"></i>λ₁(∇²L)</span><span style="color:var(--amber)"><i class="dash"></i>2/η</span></div></div>
+      <div class="mini"><h3>Cumulative direction-switches</h3><p class="cap">g_ray.idx — new dominant M<sub>r</sub> directions so far (the cycle counter)</p>
+        <div class="plot"><canvas id="c_cycle"></canvas><div class="tip" id="t_cycle"></div></div></div>
+      <div class="mini"><h3>Power iteration ‖Jᵀr‖ &amp; λ₁(NTK)</h3><p class="cap">log scale · the amplified direction (Phase 2)</p>
+        <div class="plot"><canvas id="c_power"></canvas><div class="tip" id="t_power"></div></div>
+        <div class="leg"><span style="color:var(--p2)"><i style="background:var(--p2)"></i>‖Jᵀr‖</span><span style="color:var(--accent2)"><i style="background:var(--accent2)"></i>λ₁(JJᵀ)</span></div></div>
+    </div>
+    <div class="take"><span class="mk">Q1</span><span class="tx" id="q1take"></span></div>
+
+    <div class="panel" style="margin-top:20px"><h3>Why standard init, specifically — where each scheme starts relative to 2/η</h3>
+      <p class="galhint">sharp₀ = median sharpness in the first 3 steps · maxSharp = peak over training · both ÷ 2/η · MLP runs</p>
+      <div style="overflow-x:auto"><table id="initTab"></table></div>
+      <p style="font-size:13px;color:var(--muted);margin:10px 0 0">Standard <b>kaiming</b> lands you at the Edge from step one (0.90×2/η, half of runs above it, peaking at 1.32×). Small-scale <b>default</b> and <b>muP</b> start deep sub-critical (0.15–0.21×) and muP often never reaches 2/η at all — which is exactly why the cycle, EoS oscillation, and sharpening are <em>standard-init</em> phenomena.</p>
+    </div>
+  </section>
+
+  <div class="rule"></div>
+
+  <!-- Per-dataset core -->
+  <section id="datasets">
+    <span class="qtag">Systematically, one dataset at a time</span>
+    <h2>Six datasets, six different systems</h2>
+    <p class="lede">Averaging the six tasks together hides the real story — they behave like <b>different systems</b>. Two
+      things about each task's curvature explain most of what happens. First, <b>how high it can sharpen</b> (its
+      ceiling): this decides whether it reaches the 2/η edge at all, or instead blows up. Second, <b>how simple its
+      curvature is</b>: simple (few directions, slow-changing) means the theory works; complex means it fails. Each
+      card below is one task on its own, across every initialization and learning rate. They are ordered from the
+      simplest (ksparse — theory is exact) to the most complex (cifar — theory fails). Numbers are medians over that
+      task's runs; forecast errors are measured 10 steps after the theory was last reset.</p>
+    <div id="dsCards"></div>
+    <div class="panel" style="margin-top:10px"><h3>These fall into four dynamical regimes</h3>
+      <p class="galhint">the same six datasets, grouped by how the Edge behaves and whether the cycle locks or persists</p>
+      <div style="overflow-x:auto"><table id="regimeTab"></table></div></div>
+  </section>
+
+  <div class="rule"></div>
+
+  <!-- Q2 -->
+  <section id="q2">
+    <span class="qtag">Question 2 · does the cycle repeat?</span>
+    <h2>Yes — and the learning rate sets how many times</h2>
+    <p class="lede">The cycle counter (new dominant directions, g_ray.idx) is the cleanest signal. Overlaid across
+      the representative runs, two behaviours separate sharply: at small η the counter <b>saturates early</b>
+      (a handful of switches, then a flat line — GD has <b>locked</b> onto one direction); at large η it
+      <b>climbs all the way to the final step</b> — the cycle <b>never stops</b>.</p>
+
+    <div class="panel big"><h3>Cumulative direction-switches over training — all runs</h3>
+      <p class="cap" style="font-family:var(--mono);font-size:10.5px;color:var(--faint);margin:1px 0 8px">x = iteration (fraction of run) · y = # new dominant directions seen so far · flat tail = locked · rising tail = persistent cycle</p>
+      <div class="plot"><canvas id="c_overlay"></canvas><div class="tip" id="t_overlay"></div></div>
+      <div class="leg" id="overlayLeg"></div></div>
+
+    <div class="grid2">
+      <div class="mini"><h3>Cycle count vs learning rate</h3><p class="cap">mean # direction-switches (kaiming MLP) · faint lines = p25/p75 spread · rises then collapses</p>
+        <div class="plot"><canvas id="c_cyclelr"></canvas><div class="tip" id="t_cyclelr"></div></div>
+        <div class="leg"><span style="color:var(--accent2)"><i style="background:var(--accent2)"></i>mean # switches</span><span style="color:var(--faint)"><i style="background:var(--faint)"></i>p25 / p75</span></div></div>
+      <div class="mini"><h3>Cycle persistence vs learning rate</h3><p class="cap">how far into the run the last switch fires (1.0 = to the final step)</p>
+        <div class="plot"><canvas id="c_persist"></canvas><div class="tip" id="t_persist"></div></div>
+        <div class="leg"><span style="color:var(--p1)"><i style="background:var(--p1)"></i>persistence</span><span style="color:var(--amber)"><i class="dash"></i>lock/persist threshold</span></div></div>
+    </div>
+    <div class="take"><span class="mk">Q2</span><span class="tx">Cycle count <b>rises with η</b> — kaiming mean <b>2.9 → 6.4 → 8.2 → 12</b> as η goes 0.02 → 0.2 — then <b>collapses to 4.6 at η=0.5</b> where GD turns chaotic and clean anchors stop forming. Two honest caveats: run-to-run <b>variance is large</b> (η=0.12 spans 0–23 switches) and the highest-η points rest on <b>few runs</b> (η=0.2: n=3). The mean trend and the collapse are robust; the exact shape is noisy. Persistence (how late the last switch fires) peaks near <b>η≈0.2</b>.</span></div>
+
+    <div class="panel" style="margin-top:20px"><h3>Two clocks, well separated in time</h3>
+      <p class="galhint">fast clock = EoS oscillation period (sharpness crossing 2/η) · slow clock = median steps between direction-switches</p>
+      <div style="overflow-x:auto"><table id="clockTab"></table></div>
+      <p style="font-size:13px;color:var(--muted);margin:10px 0 0">The fast within-direction EoS bounce (~2-step period) and the slow across-direction switching cycle differ by <b>8–56×</b>. Saddle is the exception — its "fast" clock is itself slow (~176), the signature of the <span class="rtag rt-intermittent">intermittent</span> regime where the whole thing runs in widely-spaced discrete events rather than a steady bounce.</p>
+    </div>
+  </section>
+
+  <div class="rule"></div>
+
+  <!-- Theory fit -->
+  <section id="theory">
+    <span class="qtag">How well does the writeup explain it?</span>
+    <h2>Two axes: rank sets the direction, growth sets the magnitude</h2>
+    <p class="lede">One thing to get right first: the theory's forecasts <b>reset to the truth every so often</b>, so if you
+      average the error over all steps it looks great for a fake reason. The fair test is: <b>how wrong is the forecast
+      a few steps after it was last reset?</b> That is what the charts below show. The answer splits on two separate
+      questions. <b>Which direction sharpens</b> is predicted well when the curvature has few important directions
+      (good on ksparse/chebyshev/saddle, poor on cifar). <b>How fast it sharpens</b> is predicted well when the
+      curvature grows slowly (exact on ksparse/saddle, way off on chebyshev/cifar). The <b>total</b> curvature is the
+      one thing predictable almost everywhere.</p>
+
+    <div class="grid2">
+      <div class="mini"><h3>Forecast error vs horizon — trace vs top eigenvalue</h3><p class="cap">median rel-error · log scale · steps since re-anchor · all std-init runs</p>
+        <div class="plot"><canvas id="c_thz"></canvas><div class="tip" id="t_thz"></div></div>
+        <div class="leg"><span style="color:var(--good)"><i style="background:var(--good)"></i>Tr(NTK) — Pred-5.1</span><span style="color:var(--bad)"><i style="background:var(--bad)"></i>λ₁(NTK) — Pred-4</span></div></div>
+      <div class="mini"><h3>Direction fidelity vs horizon, by task</h3><p class="cap">|cos| of predicted vs actual top NTK eigenvector · structured tasks hold it, rich ones decay</p>
+        <div class="plot"><canvas id="c_dhz"></canvas><div class="tip" id="t_dhz"></div></div>
+        <div class="leg" id="dhzleg"></div></div>
+    </div>
+
+    <div class="take"><span class="mk">FIT</span><span class="tx">The pooled curves (left: trace vs top-eigenvalue error; right: direction by task) show the aggregate, but the <b>truth is per-dataset</b>: on <b>ksparse</b> everything is exact (direction 1.0, magnitude 0%, trace 0.5%); on <b>chebyshev</b> direction is perfect (0.99) yet magnitude explodes (60%) because its curvature grows fast; on <b>cifar10</b> both direction (0.60) and magnitude (68%) fail. The one robust forecast is the <b>trace</b> (≤1% at 10 steps on 5 of 6 datasets). And <b>Pred-3</b>'s frozen residual theory misses the EoS plateau on every task that reaches the Edge — it predicts continued decay while the real residual saturates.</span></div>
+  </section>
+
+  <div class="rule"></div>
+
+  <!-- Q modes -->
+  <section id="qmodes">
+    <span class="qtag">Why it works — the function-Hessian Q, three ways</span>
+    <h2>What makes the curvature Q special?</h2>
+    <div class="take" style="background:color-mix(in srgb,var(--accent) 8%,var(--panel));border-color:color-mix(in srgb,var(--accent) 30%,var(--line))"><span class="mk" style="color:var(--accent)">READ FIRST</span><span class="tx">There is no contradiction between "all three are identical" and "the random one fails" — they are about <b>two different things</b>. <b>Q is never used to train the network</b>; the optimizer only uses the gradient. Q is just a <b>lens we use afterward to explain</b> what happened. So the <b>training run is exactly identical</b> for all three choices of Q (same loss, same sharpness — checked to zero difference). "The random Q fails" means: as a <em>lens</em>, it points in the wrong direction and does not explain the sharpening. Same car, different measuring instruments — a broken instrument gives wrong readings, but the car moved the same way.</span></div>
+    <p class="lede">The theory is built on the "function Hessian" Q — the curvature of the network's outputs — combined with
+      the errors into <b>M<sub>r</sub> = Σ<sub>k</sub> r<sub>k</sub> Q<sub>k</sub></b>. To find out what part of Q
+      actually matters, I swap it out three ways. Crucially, the optimizer <b>never uses Q</b>, so the training run
+      itself does not change — loss and sharpness are <b>exactly identical</b> in all three cases (checked: zero
+      difference). Only the curvature diagnostics change. The three choices are:
+      <b style="color:var(--good)">evolving</b> — the real Q, recomputed every step;
+      <b style="color:var(--p3)">frozen at start</b> — the real Q, but fixed at the initial weights;
+      <b style="color:var(--accent2)">random</b> — a random Q of the same overall size. Comparing them answers two
+      questions: does Q's <em>changing over time</em> matter, and does Q's <em>specific shape</em> matter?</p>
+
+    <div class="panel"><div class="fimg2"><img loading="lazy" id="qmodeimg" alt="three Q-modes: λmax(Mr) and residual↔Mr alignment for evolving / init-fixed / random-fixed"></div>
+      <p class="galhint" style="margin-top:8px">top row: λ_max(M<sub>r</sub>) over training · bottom row: residual↔top-eigenvector alignment |cos(Jᵀr,u₁)| · green=evolving, pink=init-fixed, purple=random-fixed</p></div>
+    <div class="take" style="background:color-mix(in srgb,var(--amber) 7%,var(--panel));border-color:color-mix(in srgb,var(--amber) 25%,var(--line))"><span class="mk" style="color:var(--amber)">SCOPE</span><span class="tx">This three-way Q test was run on the <b>three tasks that support it</b> — sparse-parity, saddle, and chebyshev (they need no external data, so the exact ∇²f is cheap and clean). I did <b>not</b> run it on mnist/cifar (their data pipeline projects the inputs and I could not reproduce that setup reliably). The mechanism below is a general property of the function-Hessian and almost certainly carries over, but treat the image tasks as <b>expected, not verified</b>.</span></div>
+
+    <div class="grid2">
+      <div class="take" style="margin:0"><span class="mk" style="color:var(--p3)">FROZEN AT START</span><span class="tx"><b>Keeps the right direction, gets the size wrong.</b> If you freeze Q at the start (green vs pink in the figure), the top curvature direction stays <b>96–99% the same</b> as the true, updating one for the whole run. Only its <em>size</em> drifts (final value 0.7×–2.1× the truth, depending on task). So the sharpening direction is basically <b>decided at initialization</b> — only its size needs the live Q. That is exactly why the theory predicts the direction well but the size badly.</span></div>
+      <div class="take" style="margin:0"><span class="mk" style="color:var(--accent2)">RANDOM</span><span class="tx"><b>Same size, wrong shape — and it fails.</b> A random Q with the <em>same total curvature</em> (purple in the figure) collapses: its top curvature is 2–20× too small and its top direction is <b>unrelated to the gradient</b>. Why? The real Q packs its curvature into a <b>few</b> directions; a random one spreads it over <b>all</b> of them. So what matters is not how much curvature there is, but that it is <b>concentrated in a few directions</b>.</span></div>
+    </div>
+
+    <div class="panel" style="margin-top:18px"><h3>The three Q-modes, quantified</h3>
+      <p class="galhint">λ_max ratio &amp; correlation vs the true evolving M<sub>r</sub> · 2nd-half-mean residual↔eigenvector alignment · Frobenius concentration</p>
+      <div style="overflow-x:auto"><table id="qmodeTab"></table></div></div>
+    <div class="take"><span class="mk">SO FAR</span><span class="tx">Putting the two together: the curvature direction that sharpens is a <b>specific feature of the network that already exists at the start</b> — freezing Q keeps it (the training only rescales it), and a same-size random Q does not have it. But <em>why</em> does the frozen one keep it and the random one lose it — is it because the real Q is low-rank, or because it points a specific way? The next section tests exactly that, and the answer is: <b>the specific direction</b>, not merely being low-rank.</span></div>
+  </section>
+
+  <div class="rule"></div>
+
+  <!-- New experiments -->
+  <section id="experiments">
+    <span class="qtag">Two follow-up experiments</span>
+    <h2>Testing the two hardest claims directly</h2>
+
+    <h2 style="font-size:19px;margin:22px 0 2px">1. Is it the low rank, or the specific direction?</h2>
+    <p class="lede">The claim above was that Q's <b>low-rank structure</b> is what matters. But that mixes two things:
+      being low-rank, and pointing in the <em>right</em> direction. To separate them, I built a <b>random Q that is
+      also low-rank</b> — same number of important directions and the same eigenvalues as the true Q, but the
+      directions themselves are <b>random</b>. If low-rank alone were the reason, this should work.</p>
+    <div class="panel"><div class="fimg2"><img loading="lazy" id="lowrankimg" alt="random low-rank Q: recovers eigenvalue, not alignment"></div></div>
+    <div class="take"><span class="mk">RESULT</span><span class="tx">It does <b>not</b> work. The random low-rank Q gets the <b>big top eigenvalue back</b> (left chart — being low-rank is exactly what makes the eigenvalue large), but its direction is <b>still unrelated to the gradient</b> — the alignment sits at chance (~0.04), the same as a fully random Q, while the true and frozen-at-start Q are far above it (0.09–0.42). <b>Conclusion (updated): low-rank is <em>not</em> the special ingredient by itself.</b> Low-rank concentration explains why the top eigenvalue is <em>large</em>, but what makes Q actually work is that its leading direction happens to line up with where the gradient pushes — and that specific direction is a real feature of the trained network, present at the start, that no random operator (low-rank or not) reproduces.</span></div>
+
+    <h2 style="font-size:19px;margin:30px 0 2px">2. Does the cycle really repeat? (independent check)</h2>
+    <p class="lede">Earlier the "cycle repeats" count came from the widget's own anchor counter, which uses a threshold and
+      could over-count. So I checked it a completely different way: I directly tracked the <b>top curvature direction
+      itself</b> every step and asked how many times it genuinely rotates to a <b>new</b> direction (more than 60°
+      away from every direction seen before) — no thresholds on alignment, just geometry.</p>
+    <div class="panel"><div class="fimg2"><img loading="lazy" id="cycleimg" alt="top curvature direction jumps to new directions repeatedly"></div></div>
+    <div class="take"><span class="mk">RESULT</span><span class="tx">The cycle is <b>real</b>. The top direction stays put most of the time (purple line near 1) but <b>drops to ~0 and jumps to a genuinely new direction several times per run</b>: <b>4–6 times</b> on these runs, and the count is the <b>same across random seeds</b> (chebyshev η=0.05 gives 4 on both seed 0 and seed 1). This roughly matches the anchor counter, so that was not over-counting. <b>This upgrades the earlier "not certain" cycle claim to clear</b> — the exact number depends on how strict you are (4 at &gt;60°, up to ~11 at &gt;32°), but that the direction repeatedly switches to new directions is solid and reproducible.</span></div>
+  </section>
+
+  <div class="rule"></div>
+
+  <!-- Observations -->
+  <section id="obs">
+    <span class="qtag">The findings, plainly</span>
+    <h2>What the runs actually show</h2>
+    <p class="lede">One finding per point, in plain terms. Each is tagged for how sure I am:
+      <span class="cbadge cb-solid">clear</span> means it is well-checked and holds across the runs;
+      <span class="cbadge cb-tent">not certain yet</span> means the evidence points that way but is noisy or incomplete,
+      and I say why.</p>
+    <div class="obs" id="obsList"></div>
+  </section>
+
+  <div class="foot" id="foot"></div>
+</div>
+
+<script>
+const RUNS = __RUNS__;
+const CYCLELR = __CYCLELR__;
+const PREDACC = __PREDACC__;
+const OBS = __OBS__;
+const REGIMES = __REGIMES__;
+const INITTAB = __INITTAB__;
+const CLOCKS = __CLOCKS__;
+const THEORYHZ = __THEORYHZ__;
+const DIRHZ = __DIRHZ__;
+const CEILING = __CEILING__;
+const CYCLEHONEST = __CYCLEHONEST__;
+const DSREPORT = __DSREPORT__;
+const QMODES = __QMODES__;
+const EXPERIMENTS = __EXPERIMENTS__;
+const css=v=>getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+/* ---------- generic line chart ---------- */
+function setup(cv){const dpr=Math.max(1,window.devicePixelRatio||1);const r=cv.getBoundingClientRect();
+  cv.width=Math.round(r.width*dpr);cv.height=Math.round(r.height*dpr);const c=cv.getContext('2d');
+  c.setTransform(dpr,0,0,dpr,0,0);return {c,w:r.width,h:r.height};}
+function niceTicks(lo,hi,n){const span=hi-lo||1;const raw=span/n;const mag=Math.pow(10,Math.floor(Math.log10(raw)));
+  const norm=raw/mag;const step=(norm<1.5?1:norm<3?2:norm<7?5:10)*mag;const t=[];
+  for(let v=Math.ceil(lo/step)*step;v<=hi+1e-9;v+=step)t.push(v);return t;}
+function lineChart(id,opts){
+  const cv=document.getElementById(id);const {c,w,h}=setup(cv);
+  const padL=opts.padL??48,padR=14,padT=10,padB=24,pw=w-padL-padR,ph=h-padT-padB;
+  const inkC=css('--ink'),muteC=css('--faint'),gridC=css('--grid');
+  const S=opts.series.filter(s=>s&&s.y);
+  const logY=opts.logY;
+  const floor=opts.floor??1e-9;
+  const yv=v=>logY?Math.log10(Math.max(v,floor)):v;
+  let ally=[];S.forEach(s=>s.y.forEach(v=>{if(v!=null&&isFinite(v))ally.push(yv(v));}));
+  if(opts.hline!=null)ally.push(yv(opts.hline));
+  if(opts.ymin!=null)ally.push(opts.ymin); if(opts.ymax!=null)ally.push(opts.ymax);
+  if(!ally.length){c.clearRect(0,0,w,h);return;}
+  let ymin=opts.ymin!=null?opts.ymin:Math.min(...ally),ymax=opts.ymax!=null?opts.ymax:Math.max(...ally);
+  if(ymin===ymax){ymin-=1;ymax+=1;} const pad=(ymax-ymin)*.08;ymin-=pad;ymax+=pad;
+  const X=opts.x, xmin=X[0], xmax=X[X.length-1]||1;
+  const px=v=>padL+(v-xmin)/((xmax-xmin)||1)*pw;
+  const py=v=>padT+(ymax-yv(v))/((ymax-ymin)||1)*ph;
+  c.clearRect(0,0,w,h);
+  // grid + y ticks
+  c.font='10px '+css('--mono');c.textBaseline='middle';
+  const yt=logY?[]:niceTicks(ymin,ymax,4);
+  if(logY){for(let e=Math.floor(ymin);e<=Math.ceil(ymax);e++)yt.push(e);}
+  c.strokeStyle=gridC;c.fillStyle=muteC;c.lineWidth=1;
+  yt.forEach(t=>{const Y=padT+(ymax-t)/((ymax-ymin)||1)*ph;if(Y<padT-1||Y>padT+ph+1)return;
+    c.beginPath();c.moveTo(padL,Y);c.lineTo(padL+pw,Y);c.stroke();
+    c.textAlign='right';let lab=logY?('1e'+t):(Math.abs(t)>=1000?(t/1000).toFixed(t%1000?1:0)+'k':(Math.abs(t)<1&&t!==0?t.toFixed(2):t.toFixed(t%1?1:0)));
+    c.fillText(lab,padL-6,Y);});
+  // x ticks (format decimals when the axis range is fractional)
+  c.textAlign='center';const xt=niceTicks(xmin,xmax,5);const xrange=Math.abs(xmax-xmin);
+  const xfmt=v=>xrange>=8?(''+Math.round(v)):xrange>=0.8?(+v).toFixed(1):(+v).toFixed(2);
+  xt.forEach(t=>{const Xx=px(t);if(Xx<padL-1||Xx>padL+pw+1)return;c.fillText(xfmt(t),Xx,padT+ph+12);});
+  // hline
+  if(opts.hline!=null){c.strokeStyle=css('--amber');c.lineWidth=1.4;c.setLineDash([4,3]);
+    c.beginPath();c.moveTo(padL,py(opts.hline));c.lineTo(padL+pw,py(opts.hline));c.stroke();c.setLineDash([]);}
+  // series
+  S.forEach(s=>{c.strokeStyle=s.color;c.lineWidth=s.w||1.7;c.beginPath();let started=false;
+    for(let i=0;i<X.length;i++){const v=s.y[i];if(v==null||!isFinite(v)){started=false;continue;}
+      const Xx=px(X[i]),Yy=py(v);if(!started){c.moveTo(Xx,Yy);started=true;}else c.lineTo(Xx,Yy);}
+    c.stroke();
+    if(s.dot){const li=X.length-1;const v=s.y[li];if(v!=null&&isFinite(v)){c.fillStyle=s.color;
+      c.beginPath();c.arc(px(X[li]),py(v),2.6,0,7);c.fill();}}});
+  cv._geo={px,py,padL,padR,padT,padB,pw,ph,xmin,xmax,X,S,yv};
+}
+/* hover */
+function bindHover(id,tipid,fmt){
+  const cv=document.getElementById(id),tip=document.getElementById(tipid);
+  cv.addEventListener('pointermove',e=>{const g=cv._geo;if(!g)return;const r=cv.getBoundingClientRect();
+    const mx=e.clientX-r.left;let bi=0,bd=1e9;
+    for(let i=0;i<g.X.length;i++){const d=Math.abs(g.px(g.X[i])-mx);if(d<bd){bd=d;bi=i;}}
+    if(bd>40){tip.style.opacity=0;return;}
+    tip.style.opacity=1;tip.innerHTML=fmt(bi);
+    tip.style.left=Math.min(g.px(g.X[bi])+10,r.width-140)+'px';tip.style.top='8px';});
+  cv.addEventListener('pointerleave',()=>{tip.style.opacity=0;});
+}
+/* bar chart (theory) */
+function barChart(id,cats,seriesA,seriesB,logB){
+  const cv=document.getElementById(id);const {c,w,h}=setup(cv);
+  const padL=40,padR=40,padT=14,padB=40,pw=w-padL-padR,ph=h-padT-padB;
+  c.clearRect(0,0,w,h);c.font='10px '+css('--mono');
+  const n=cats.length;const gw=pw/n;const bw=gw*0.30;
+  const aMax=1;// direction cos in [0,1]
+  const bVals=seriesB.map(v=>Math.log10(Math.max(v,1)));const bMax=Math.max(...bVals,1);
+  // axes labels
+  c.fillStyle=css('--faint');c.textAlign='center';
+  cats.forEach((cat,i)=>{const cx=padL+gw*i+gw/2;c.fillText(cat,cx,padT+ph+13);
+    // A bar (left, direction)
+    const ah=seriesA[i]/aMax*ph;c.fillStyle=css('--good');
+    c.fillRect(cx-bw-3,padT+ph-ah,bw,ah);
+    // B bar (right, magnitude log)
+    const bh=bVals[i]/bMax*ph;c.fillStyle=css('--bad');
+    c.fillRect(cx+3,padT+ph-bh,bw,bh);
+    // value labels
+    c.fillStyle=css('--good');c.font='9px '+css('--mono');c.fillText(seriesA[i].toFixed(2),cx-bw/2-3,padT+ph-ah-6);
+    c.fillStyle=css('--bad');const bl=seriesB[i]>=1000?(seriesB[i]/1000).toFixed(0)+'k%':seriesB[i].toFixed(0)+'%';
+    c.fillText(bl,cx+bw/2+3,padT+ph-bh-6);c.font='10px '+css('--mono');c.fillStyle=css('--faint');});
+  // baseline
+  c.strokeStyle=css('--line');c.lineWidth=1;c.beginPath();c.moveTo(padL,padT+ph);c.lineTo(padL+pw,padT+ph);c.stroke();
+}
+
+/* ---------- Q1 run explorer ---------- */
+let curRun=0;
+function renderChips(){const box=document.getElementById('runChips');
+  box.innerHTML=RUNS.map((r,i)=>{const cl=r.tag?('rt-'+r.tag.replace(/[^a-zA-Z-]/g,'')):'';
+    const pill=r.tag?`<span class="rtag ${cl}">${r.tag}</span>`:'';
+    return `<button class="chip" role="button" aria-pressed="${i===curRun}" data-i="${i}">${r.label}${pill}</button>`;}).join('');
+  box.querySelectorAll('.chip').forEach(b=>b.onclick=()=>{curRun=+b.dataset.i;renderChips();drawRun();});
+}
+function drawRun(){
+  const R=RUNS[curRun];const f=R.t;const tl=R.twoOverLr;
+  document.getElementById('runMeta').innerHTML=
+    `<b>${R.label}</b> &nbsp;·&nbsp; 2/η = <b>${tl}</b> &nbsp;·&nbsp; ${R.steps} steps &nbsp;·&nbsp; <span style="color:var(--accent2)">${R.regime}</span>`;
+  lineChart('c_loss',{x:f,logY:true,floor:1e-9,series:[{y:R.loss,color:css('--accent'),dot:1}]});
+  lineChart('c_sharp',{x:f,hline:tl,series:[{y:R.sharp,color:css('--sharp'),dot:1}]});
+  lineChart('c_cycle',{x:f,ymin:0,series:[{y:R.cycle,color:css('--accent2'),w:2,dot:1}]});
+  lineChart('c_power',{x:f,logY:true,floor:1e-4,series:[{y:R.Jrn,color:css('--p2'),dot:1},{y:R.ntk1,color:css('--accent2'),dot:1}]});
+  bindHover('c_loss','t_loss',i=>`<span class="tk">t</span> ${f[i]} · <span class="tk">loss</span> ${fmtE(R.loss[i])}`);
+  bindHover('c_sharp','t_sharp',i=>`<span class="tk">t</span> ${f[i]} · <span class="tk">λ₁</span> ${fmtN(R.sharp[i])} · <span class="tk">2/η</span> ${tl}`);
+  bindHover('c_cycle','t_cycle',i=>`<span class="tk">t</span> ${f[i]} · <span class="tk">switches</span> ${R.cycle[i]}`);
+  bindHover('c_power','t_power',i=>`<span class="tk">t</span> ${f[i]} · <span class="tk">‖Jᵀr‖</span> ${fmtE(R.Jrn[i])} · <span class="tk">λ₁NTK</span> ${fmtE(R.ntk1[i])}`);
+  // Q1 takeaway per run
+  const lastCycle=R.cycle[R.cycle.length-1];
+  const el=document.getElementById('q1take');
+  el.innerHTML=`This run reaches the 2/η line and holds it while the loss keeps dropping. It logs <b>${lastCycle} direction-switches</b> — `+
+    (R.regime.includes('lock')||R.regime.includes('dies')?`the counter <b>saturates early</b> and then flattens: GD locks onto one direction and only the fast ±2/η micro-oscillation remains.`:
+     `the counter <b>keeps climbing</b>: new dominant directions keep taking over — the cycle is still running at the final step.`);
+}
+function fmtE(v){return v==null?'—':(+v).toExponential(2);}
+function fmtN(v){return v==null?'—':(+v).toFixed(1);}
+
+/* ---------- Q2 overlay ---------- */
+const OVC=['#4f6fd4','#0f9d8f','#d98a17','#e0559a','#8b5cf6','#dc5b52','#12a150'];
+function drawOverlay(){
+  // x normalized 0..1
+  const series=RUNS.map((R,i)=>{
+    const N=R.t.length;const x=R.t.map(t=>t/R.steps);
+    return {x,y:R.cycle,color:OVC[i%OVC.length],label:R.label};
+  });
+  // custom: shared x grid — resample each to common 0..1
+  const G=[];for(let k=0;k<=100;k++)G.push(k/100);
+  const rs=series.map(s=>{const y=G.map(gx=>{
+    // nearest
+    let bi=0,bd=1e9;for(let i=0;i<s.x.length;i++){const d=Math.abs(s.x[i]-gx);if(d<bd){bd=d;bi=i;}}
+    return s.y[bi];});return {y,color:s.color,w:1.9,dot:1};});
+  lineChart('c_overlay',{x:G,ymin:0,padL:40,series:rs});
+  document.getElementById('overlayLeg').innerHTML=RUNS.map((R,i)=>
+    `<span style="color:${OVC[i%OVC.length]}"><i style="background:${OVC[i%OVC.length]}"></i>${R.label.replace(/ · /g,' ')}</span>`).join('');
+  const cv=document.getElementById('c_overlay'),tip=document.getElementById('t_overlay');
+  cv.addEventListener('pointermove',e=>{const g=cv._geo;if(!g)return;const r=cv.getBoundingClientRect();
+    const mx=e.clientX-r.left,my=e.clientY-r.top;let best=null,bd=1e9;
+    g.S.forEach((s,si)=>{for(let i=0;i<g.X.length;i++){const v=s.y[i];if(v==null)continue;
+      const d=(g.px(g.X[i])-mx)**2+(g.py(v)-my)**2;if(d<bd){bd=d;best={si,i,v};}}});
+    if(!best||bd>900){tip.style.opacity=0;return;}
+    tip.style.opacity=1;tip.innerHTML=`<span style="color:${OVC[best.si]}">${RUNS[best.si].label}</span><br><span class="tk">t</span> ${Math.round(g.X[best.i]*100)}% · <span class="tk">switches</span> ${best.v}`;
+    tip.style.left=Math.min(mx+12,r.width-150)+'px';tip.style.top=Math.max(my-10,4)+'px';});
+  cv.addEventListener('pointerleave',()=>{tip.style.opacity=0;});
+}
+/* ---------- Q2 aggregate ---------- */
+function drawAgg(){
+  const lrh=CYCLEHONEST.map(d=>d.lr);
+  lineChart('c_cyclelr',{x:lrh,ymin:0,padL:40,series:[
+    {y:CYCLEHONEST.map(d=>d.p75),color:css('--faint'),w:0.8},
+    {y:CYCLEHONEST.map(d=>d.p25),color:css('--faint'),w:0.8},
+    {y:CYCLEHONEST.map(d=>d.mean),color:css('--accent2'),w:2.4,dot:1}]});
+  bindHover('c_cyclelr','t_cyclelr',i=>`<span class="tk">η</span> ${lrh[i]} · <span class="tk">mean</span> ${CYCLEHONEST[i].mean} <span class="tk">[p25,p75]</span> [${CYCLEHONEST[i].p25},${CYCLEHONEST[i].p75}] <span class="tk">n=</span>${CYCLEHONEST[i].n}`);
+  const lr=CYCLELR.map(d=>d.lr);
+  lineChart('c_persist',{x:lr,ymin:0,ymax:1,hline:0.5,padL:40,series:[{y:CYCLELR.map(d=>d.medPersist),color:css('--p1'),w:2.2,dot:1}]});
+  bindHover('c_persist','t_persist',i=>`<span class="tk">η</span> ${lr[i]} · <span class="tk">persistence</span> ${CYCLELR[i].medPersist}`);
+}
+/* ---------- theory: horizon-based ---------- */
+function drawTheory(){
+  const H=THEORYHZ.filter(d=>d.trace!=null||d.pred4!=null);
+  const xs=H.map(d=>d.h);
+  lineChart('c_thz',{x:xs,logY:true,floor:0.1,padL:44,series:[
+    {y:H.map(d=>d.trace),color:css('--good'),w:2.2,dot:1},
+    {y:H.map(d=>d.pred4),color:css('--bad'),w:2.2,dot:1}]});
+  bindHover('c_thz','t_thz',i=>`<span class="tk">horizon</span> ${xs[i]} steps · <span class="tk" style="color:var(--good)">trace</span> ${H[i].trace!=null?H[i].trace+'%':'—'} · <span class="tk" style="color:var(--bad)">λ₁</span> ${H[i].pred4!=null?H[i].pred4+'%':'—'}`);
+  const HZ=[1,2,5,10,20];const DC=['#4f6fd4','#0f9d8f','#8b5cf6','#d98a17','#e0559a','#dc5b52'];
+  lineChart('c_dhz',{x:HZ,ymin:0,ymax:1.02,padL:44,series:DIRHZ.map((d,k)=>({y:HZ.map(h=>d['h'+h]),color:DC[k%DC.length],w:1.8,dot:1}))});
+  document.getElementById('dhzleg').innerHTML=DIRHZ.map((d,k)=>`<span style="color:${DC[k%DC.length]}"><i style="background:${DC[k%DC.length]}"></i>${d.ds}</span>`).join('');
+  const cv=document.getElementById('c_dhz'),tip=document.getElementById('t_dhz');
+  cv.addEventListener('pointermove',e=>{const g=cv._geo;if(!g)return;const r=cv.getBoundingClientRect();
+    const mx=e.clientX-r.left,my=e.clientY-r.top;let best=null,bd=1e9;
+    g.S.forEach((s,si)=>{for(let i=0;i<g.X.length;i++){const v=s.y[i];if(v==null)continue;const d=(g.px(g.X[i])-mx)**2+(g.py(v)-my)**2;if(d<bd){bd=d;best={si,i,v};}}});
+    if(!best||bd>800){tip.style.opacity=0;return;}
+    tip.style.opacity=1;tip.innerHTML=`<span style="color:${DC[best.si]}">${DIRHZ[best.si].ds}</span> · <span class="tk">h</span>${HZ[best.i]} · <span class="tk">cos</span> ${best.v}`;
+    tip.style.left=Math.min(mx+10,r.width-130)+'px';tip.style.top=Math.max(my-8,4)+'px';});
+  cv.addEventListener('pointerleave',()=>{tip.style.opacity=0;});
+}
+/* ---------- cycle ring (hero) ---------- */
+function drawRing(){
+  const cv=document.getElementById('ring');const dpr=Math.max(1,window.devicePixelRatio||1);
+  const W=360,H=300;cv.width=W*dpr;cv.height=H*dpr;const c=cv.getContext('2d');c.setTransform(dpr,0,0,dpr,0,0);
+  c.clearRect(0,0,W,H);const cx=W/2,cy=H/2,R=80;
+  const cols=[css('--p1'),css('--p2'),css('--p3')];
+  const labs=['① align','② power','③ dominance'];const gap=0.17;
+  for(let k=0;k<3;k++){
+    const a0=-Math.PI/2+k*(2*Math.PI/3)+gap/2, a1=-Math.PI/2+(k+1)*(2*Math.PI/3)-gap/2;
+    c.beginPath();c.arc(cx,cy,R,a0,a1);c.strokeStyle=cols[k];c.lineWidth=14;c.lineCap='round';c.stroke();
+    const ax=cx+Math.cos(a1)*R,ay=cy+Math.sin(a1)*R;const ta=a1+Math.PI/2;
+    c.fillStyle=cols[k];c.beginPath();
+    c.moveTo(ax+Math.cos(ta)*8,ay+Math.sin(ta)*8);
+    c.lineTo(ax+Math.cos(a1)*11,ay+Math.sin(a1)*11);
+    c.lineTo(ax-Math.cos(ta)*8,ay-Math.sin(ta)*8);c.closePath();c.fill();
+    // label — placed just outside the arc midpoint, clamped inside the canvas
+    const am=(a0+a1)/2;let lx=cx+Math.cos(am)*(R+16),ly=cy+Math.sin(am)*(R+16);
+    c.fillStyle=cols[k];c.font='600 12px '+css('--mono');
+    const align=Math.cos(am)>0.25?'left':Math.cos(am)<-0.25?'right':'center';
+    c.textAlign=align;c.textBaseline=Math.sin(am)>0.25?'top':Math.sin(am)<-0.25?'bottom':'middle';
+    lx=Math.max(52,Math.min(W-52,lx));
+    c.fillText(labs[k],lx,ly);
+  }
+  c.fillStyle=css('--ink');c.textAlign='center';c.textBaseline='middle';c.font='italic 600 15px '+css('--serif');
+  c.fillText('the',cx,cy-10);c.fillText('cycle',cx,cy+9);
+}
+/* observations */
+function renderObs(){document.getElementById('obsList').innerHTML=OBS.map(o=>{
+  const badge=o.conf==='tentative'
+    ? '<span class="cbadge cb-tent">not certain yet</span>'
+    : '<span class="cbadge cb-solid">clear</span>';
+  return `<div class="ob"><h4>${o.h} ${badge}</h4><p>${o.p}</p></div>`;
+}).join('');}
+/* tables */
+const clsMap={good:'cgood',mid:'cmid',bad:'cbad'};
+function renderInit(){
+  const rows=INITTAB.map(r=>`<tr><td>${r.init}</td><td class="${clsMap[r.cls]}">${r.sharp0}</td><td>${r.above}</td><td>${r.maxsharp}</td><td>${r.eos}</td><td>${r.anch}</td><td style="text-align:left;color:var(--muted)">${r.note}</td></tr>`).join('');
+  document.getElementById('initTab').innerHTML=
+    `<thead><tr><th>init scheme</th><th>sharp₀ / 2η</th><th>% start above</th><th>maxSharp / 2η</th><th>reach EoS</th><th>#switches</th><th style="text-align:left">character</th></tr></thead><tbody>${rows}</tbody>`;
+}
+function renderRegime(){
+  const rows=REGIMES.map(r=>`<tr><td><b>${r.regime}</b></td><td style="text-align:left;color:var(--muted)">${r.ex}</td><td>${r.eos}</td><td>${r.ceil}</td><td>${r.switches}</td><td style="color:var(--muted)">${r.dir}</td><td style="color:var(--muted)">${r.mag}</td></tr>`).join('');
+  document.getElementById('regimeTab').innerHTML=
+    `<thead><tr><th style="text-align:left">regime</th><th style="text-align:left">example</th><th>Edge behaviour</th><th>curv. ceiling</th><th># switches</th><th>direction fit</th><th>magnitude fit</th></tr></thead><tbody>${rows}</tbody>`;
+}
+function renderClocks(){
+  const rows=CLOCKS.map(r=>`<tr><td style="text-align:left">${r.run}</td><td>${r.tl}</td><td>${r.fast}</td><td>${r.slow}</td><td class="cgood">${r.ratio}</td></tr>`).join('');
+  document.getElementById('clockTab').innerHTML=
+    `<thead><tr><th style="text-align:left">run</th><th>2/η</th><th>fast clock (steps)</th><th>slow clock (steps)</th><th>separation</th></tr></thead><tbody>${rows}</tbody>`;
+}
+function renderExperiments(){
+  const a=document.getElementById('lowrankimg'); if(a)a.src=EXPERIMENTS.lowrank_uri;
+  const b=document.getElementById('cycleimg'); if(b)b.src=EXPERIMENTS.cycle_uri;
+}
+function renderQmodes(){
+  document.getElementById('qmodeimg').src=QMODES.uri;
+  const rows=QMODES.rows.map(r=>`<tr><td class="rlab">${r.ds}</td>`+
+    `<td style="color:var(--good)">1.00 <span style="color:var(--faint)">(ref)</span></td>`+
+    `<td style="color:var(--p3)">${r.fix_ratio.toFixed(2)}× · r=${r.corr_fix}</td>`+
+    `<td style="color:var(--accent2)">${r.rnd_ratio.toFixed(2)}×</td>`+
+    `<td style="color:var(--good)">${r.al_ev.toFixed(2)}</td><td style="color:var(--p3)">${r.al_fix.toFixed(2)}</td><td style="color:var(--accent2)">${r.al_rnd.toFixed(2)}</td>`+
+    `<td style="color:var(--good)">${r.conc_ev}</td><td style="color:var(--p3)">${r.conc_fix}</td><td style="color:var(--accent2)">${r.conc_rnd}</td></tr>`).join('');
+  document.getElementById('qmodeTab').innerHTML=
+    `<thead><tr><th class="rlab" rowspan="2">dataset</th><th colspan="3">λ_max(M<sub>r</sub>) vs evolving</th><th colspan="3">residual↔eigvec |cos|</th><th colspan="3">concentration λ₁/‖·‖<sub>F</sub></th></tr>`+
+    `<tr><th style="color:var(--good)">evolve</th><th style="color:var(--p3)">init-fix</th><th style="color:var(--accent2)">random</th>`+
+    `<th style="color:var(--good)">evolve</th><th style="color:var(--p3)">init-fix</th><th style="color:var(--accent2)">random</th>`+
+    `<th style="color:var(--good)">evolve</th><th style="color:var(--p3)">init-fix</th><th style="color:var(--accent2)">random</th></tr></thead><tbody>${rows}</tbody>`;
+}
+function renderDatasets(){
+  const cG=v=>v==null?'var(--faint)':(v>=0.9?'var(--good)':v>=0.6?'var(--amber)':'var(--bad)');   // direction cos
+  const cM=v=>v==null?'var(--faint)':(v<10?'var(--good)':v<=100?'var(--amber)':'var(--bad)');       // magnitude %
+  const cT=v=>v==null?'var(--faint)':(v<5?'var(--good)':v<=20?'var(--amber)':'var(--bad)');          // trace %
+  const html=DSREPORT.map(d=>{
+    const rows=d.table.map(r=>{
+      const mx=r.mx==null?(r.div?'<span style="color:var(--bad)">diverged</span>':'—'):r.mx.toFixed(2);
+      const sw=r.sw[0]===r.sw[2]?`${r.sw[1]}`:`${r.sw[1]} <span style="color:var(--faint)">[${r.sw[0]}–${r.sw[2]}]</span>`;
+      const rc=r.reach>=98?'var(--good)':r.reach<=2?'var(--faint)':'var(--amber)';
+      return `<tr><td class="rlab">${r.init}</td><td>${r.lr}</td><td>${r.tl}</td><td>${r.sh0.toFixed(2)}</td><td>${mx}</td><td style="color:${rc}">${r.reach}%</td><td>${sw}</td></tr>`;
+    }).join('');
+    const th=d.theory;
+    return `<div class="dscard">
+      <div class="dshead"><h3>${d.name}</h3><span class="dstag">${d.tag}</span><div class="dsid">${d.idline}</div></div>
+      <p class="dschar">${d.char}</p>
+      <div class="dsgrid2">
+        <div class="dstable"><div style="overflow-x:auto"><table>
+          <thead><tr><th class="rlab">init</th><th>η</th><th>2/η</th><th>sharp₀⁄2η</th><th>max⁄2η</th><th>EoS</th><th>#switch</th></tr></thead>
+          <tbody>${rows}</tbody></table></div></div>
+        <div class="dstheory"><div class="th-h">frozen-Mᵣ forecast · 10-step horizon</div>
+          <div class="th-row"><span class="lab">direction |cos v₁|</span><span class="val" style="color:${cG(th.dir)}">${th.dir!=null?th.dir.toFixed(2):'—'}</span></div>
+          <div class="th-row"><span class="lab">λ₁ magnitude err</span><span class="val" style="color:${cM(th.mag)}">${th.mag!=null?th.mag+'%':'—'}</span></div>
+          <div class="th-row"><span class="lab">trace err</span><span class="val" style="color:${cT(th.trace)}">${th.trace!=null?th.trace+'%':'—'}</span></div>
+        </div>
+      </div>
+      <div class="dsfig"><details><summary>▸ full diagnostic grid — ${d.gridsub}</summary>
+        <div class="fimg2"><img loading="lazy" src="${d.grid}" alt="diagnostic grid for ${d.name}"></div></details></div>
+    </div>`;
+  }).join('');
+  document.getElementById('dsCards').innerHTML=html;
+}
+
+/* ---------- boot + theme ---------- */
+function redraw(){drawRing();drawRun();drawOverlay();drawAgg();drawTheory();}
+function init(){
+  renderChips();renderObs();renderInit();renderRegime();renderClocks();renderDatasets();renderQmodes();renderExperiments();redraw();
+  document.getElementById('foot').innerHTML=
+    `<b>Method.</b> 205 offline prediction-widget captures (server.py run_stream), standard init (kaiming / default), MSE, full-batch GD. `+
+    `Cycle counter = g_ray.idx (new top-M<sub>r</sub> direction each time cos(∇L,u₁) rises through 0.9 in a &gt;25°-rotated direction). `+
+    `Sharpness = λ₁(∇²L) via Lanczos; NTK = JJᵀ; M<sub>r</sub>=Σr<sub>k</sub>∇²f<sub>k</sub>. Prediction-4 fidelity from g_pred4 (kAct vs kPred, cos5). `+
+    `Representative trajectories downsampled to ~230 points; aggregates over all standard-init MLP runs.`;
+  const btn=document.getElementById('themebtn');
+  btn.onclick=()=>{const cur=document.documentElement.getAttribute('data-theme');
+    const next=cur==='dark'?'light':cur==='light'?'dark':(matchMedia('(prefers-color-scheme:dark)').matches?'light':'dark');
+    document.documentElement.setAttribute('data-theme',next);redraw();};
+  matchMedia('(prefers-color-scheme:dark)').addEventListener?.('change',redraw);
+}
+let rt;addEventListener('resize',()=>{clearTimeout(rt);rt=setTimeout(redraw,150);});
+init();
+</script>

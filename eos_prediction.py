@@ -256,6 +256,16 @@ def run_capture(defaults_fn, argv=None, title="prediction"):
 
     t_start = time.time()
 
+    # Complete the torch.func / torch._dynamo LAZY imports up-front, single-threaded. server.py's HTTP main
+    # already does this (see _warm_torch_func) but the CAPTURE path never did — so when several capture
+    # processes start at once on one node, the first torch.func transform (§27's _tf.grad) hits a
+    # half-initialized torch._dynamo and dies in ~4s with an AttributeError. That silently killed 11/12
+    # Q-experiment captures. Best-effort: a failure here just falls back to the old lazy path.
+    try:
+        server._warm_torch_func()
+    except Exception as _e:
+        print("[%s] warn: torch.func warm-up skipped (%s)" % (title, type(_e).__name__), flush=True)
+
     # ---- 1) the prediction run (reuses capture_run's device setup + partial-save machinery) ----
     def _save_partial(recs):
         write_capture(recs, params, dev, dtype, a.label, out, use_gz, time.time() - t_start, final=False)

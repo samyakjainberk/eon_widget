@@ -1,0 +1,464 @@
+<style>
+:root{
+  --bg:#f4f6fa; --panel:#ffffff; --panel2:#fbfcfe; --ink:#1a2230; --muted:#5f6b7e;
+  --faint:#8a97ab; --line:#e3e8f0; --grid:#eef2f8; --accent:#3b6fd4; --amber:#d98a17;
+  --shadow:0 1px 2px rgba(20,30,50,.05),0 6px 24px rgba(20,30,50,.06);
+  --qr:#e0559a; --sumQ:#8b5cf6; --jjt:#16a34a; --hessian:#3b6fd4;
+  --evo:#16a34a; --fix:#e0559a; --rnd:#e0803b;
+  --mono:ui-monospace,"SF Mono","JetBrains Mono","Cascadia Code",Menlo,Consolas,monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#0d1017; --panel:#151a23; --panel2:#11151d; --ink:#e6ecf5; --muted:#98a4b6;
+  --faint:#6b7688; --line:#232c3a; --grid:#1b222e; --accent:#6f9bf0; --amber:#e0a341;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 30px rgba(0,0,0,.35);
+}}
+:root[data-theme="dark"]{
+  --bg:#0d1017; --panel:#151a23; --panel2:#11151d; --ink:#e6ecf5; --muted:#98a4b6;
+  --faint:#6b7688; --line:#232c3a; --grid:#1b222e; --accent:#6f9bf0; --amber:#e0a341;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 30px rgba(0,0,0,.35);
+}
+:root[data-theme="light"]{
+  --bg:#f4f6fa; --panel:#ffffff; --panel2:#fbfcfe; --ink:#1a2230; --muted:#5f6b7e;
+  --faint:#8a97ab; --line:#e3e8f0; --grid:#eef2f8; --accent:#3b6fd4; --amber:#d98a17;
+  --shadow:0 1px 2px rgba(20,30,50,.05),0 6px 24px rgba(20,30,50,.06);
+}
+*{box-sizing:border-box}
+body{margin:0}
+.wrap{max-width:1120px;margin:0 auto;padding:34px 22px 80px;color:var(--ink);
+  font-family:var(--sans);background:var(--bg);min-height:100vh;font-size:14px;line-height:1.5}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--accent);font-weight:600;margin:0 0 8px}
+h1{font-size:26px;line-height:1.15;margin:0 0 8px;font-weight:680;letter-spacing:-.01em;text-wrap:balance}
+h1 .thin{color:var(--muted);font-weight:400}
+.sub{color:var(--muted);max-width:64ch;margin:0 0 26px}
+.sub code{font-family:var(--mono);font-size:.9em;color:var(--ink);background:var(--grid);padding:1px 5px;border-radius:4px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);
+  padding:18px 18px 16px;margin-bottom:22px}
+.sec-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:0 0 4px}
+.sec-head h2{font-size:16px;margin:0;font-weight:640;letter-spacing:-.005em}
+.sec-head .tag{font-family:var(--mono);font-size:11px;color:var(--faint);letter-spacing:.04em}
+.lede{color:var(--muted);margin:6px 0 16px;max-width:74ch}
+.lede b{color:var(--ink);font-weight:620}
+
+/* run chips */
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin:2px 0 14px}
+.chip{font-family:var(--mono);font-size:12px;padding:6px 12px;border-radius:8px;border:1px solid var(--line);
+  background:var(--panel2);color:var(--muted);cursor:pointer;transition:all .12s;user-select:none;letter-spacing:.01em}
+.chip:hover{border-color:var(--accent);color:var(--ink)}
+.chip[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+.chip .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;vertical-align:middle}
+
+/* readout */
+.readout{font-family:var(--mono);font-size:12.5px;color:var(--muted);margin:0 0 10px;
+  display:flex;gap:16px;flex-wrap:wrap;align-items:center}
+.readout .k{color:var(--faint)}
+.readout .v{color:var(--ink);font-variant-numeric:tabular-nums}
+.pos{color:var(--ink)}
+
+/* iteration scrubber (the slider) */
+.scrub{display:flex;align-items:center;gap:12px;margin:2px 0 12px;padding:9px 14px;
+  background:var(--panel2);border:1px solid var(--line);border-radius:10px}
+.scrub-lab{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);flex:0 0 auto}
+.scrub-val{font-family:var(--mono);font-size:13px;color:var(--accent);font-weight:600;font-variant-numeric:tabular-nums;
+  min-width:44px;text-align:right;flex:0 0 auto}
+#frameSlider{flex:1 1 auto;-webkit-appearance:none;appearance:none;height:6px;border-radius:6px;
+  background:linear-gradient(90deg,var(--accent) 0%,var(--accent) var(--fill,100%),var(--grid) var(--fill,100%),var(--grid) 100%);
+  outline:none;cursor:pointer}
+#frameSlider::-webkit-slider-thumb{-webkit-appearance:none;width:17px;height:17px;border-radius:50%;
+  background:var(--accent);border:2px solid var(--panel);box-shadow:0 1px 4px rgba(0,0,0,.25);cursor:grab}
+#frameSlider::-moz-range-thumb{width:15px;height:15px;border-radius:50%;background:var(--accent);
+  border:2px solid var(--panel);cursor:grab}
+#frameSlider:focus-visible{box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 35%,transparent)}
+.scrub-ends{font-family:var(--mono);font-size:10px;color:var(--faint);flex:0 0 auto}
+
+/* legend (toggle) */
+.legend{display:flex;gap:6px;flex-wrap:wrap;margin:12px 0 2px;align-items:center}
+.lg{font-family:var(--mono);font-size:12px;padding:5px 11px 5px 9px;border-radius:20px;border:1px solid var(--line);
+  background:var(--panel2);cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:7px;
+  transition:opacity .12s,border-color .12s;color:var(--ink)}
+.lg .sw{width:11px;height:11px;border-radius:3px;flex:0 0 auto}
+.lg[aria-pressed="false"]{opacity:.4}
+.lg[aria-pressed="false"] .name{text-decoration:line-through}
+.hint{font-family:var(--mono);font-size:11px;color:var(--faint);margin-left:auto;letter-spacing:.02em}
+
+/* canvas */
+.plot{position:relative;width:100%}
+canvas{display:block;width:100%;touch-action:none}
+.scree-canvas{height:440px;cursor:crosshair}
+.tip{position:absolute;pointer-events:none;background:var(--panel);border:1px solid var(--line);
+  border-radius:8px;padding:7px 9px;font-family:var(--mono);font-size:11.5px;color:var(--ink);
+  box-shadow:var(--shadow);opacity:0;transition:opacity .08s;white-space:nowrap;z-index:5;line-height:1.5}
+.tip .tk{color:var(--faint)}
+
+/* section-B grid */
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:720px){.grid2{grid-template-columns:1fr}}
+.mini{background:var(--panel2);border:1px solid var(--line);border-radius:11px;padding:12px 12px 8px}
+.mini h3{font-size:12.5px;margin:0 0 2px;font-weight:600;color:var(--ink)}
+.mini .cap{font-family:var(--mono);font-size:10.5px;color:var(--faint);margin:0 0 8px;letter-spacing:.01em}
+.mini canvas{height:172px}
+.milegend{display:flex;gap:10px;flex-wrap:wrap;font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:6px}
+.milegend span{display:inline-flex;align-items:center;gap:5px}
+.milegend i{width:14px;height:3px;border-radius:2px;display:inline-block}
+.milegend i.dash{background:repeating-linear-gradient(90deg,currentColor 0 4px,transparent 4px 7px)}
+
+.foot{color:var(--faint);font-family:var(--mono);font-size:11px;margin-top:26px;line-height:1.7;
+  border-top:1px solid var(--line);padding-top:16px}
+.foot b{color:var(--muted);font-weight:600}
+.themebtn{position:fixed;top:14px;right:16px;font-family:var(--mono);font-size:11px;padding:6px 10px;border-radius:8px;
+  border:1px solid var(--line);background:var(--panel);color:var(--muted);cursor:pointer;z-index:20}
+</style>
+
+<button class="themebtn" id="themebtn" aria-label="Toggle theme">◐ theme</button>
+<div class="wrap">
+  <p class="eyebrow">Curvature spectra · Edge of Stability</p>
+  <h1>Eigenspectra of the training operators <span class="thin">— across runs &amp; over training</span></h1>
+  <p class="sub">The signed eigenvalue spectra of four operators, overlaid on one scree axis (rank vs
+    λ). <b>Qr</b> is the residual-weighted function Hessian Σ<sub>k</sub>r<sub>k</sub>∇²f<sub>k</sub>,
+    <b>ΣQᵢ</b> the plain function Hessian Σ<sub>k</sub>∇²f<sub>k</sub>, <b>JJᵀ</b> the NTK Gram, and
+    <b>Hessian</b> the full loss Hessian ∇²L. Pick a run, toggle any curve, drag a box to zoom.</p>
+
+  <!-- ===================== SECTION A: eigenspectrum overlay ===================== -->
+  <div class="panel">
+    <div class="sec-head"><h2>Eigenspectrum overlay</h2><span class="tag" id="opnote">exact eigenvalues · drag the slider to watch the spectrum evolve</span></div>
+    <div class="chips" id="runChips"></div>
+    <div class="scrub">
+      <span class="scrub-lab">iteration</span>
+      <span class="scrub-ends" id="scrubLo">0</span>
+      <input type="range" id="frameSlider" min="0" max="15" value="15" step="1" aria-label="training iteration">
+      <span class="scrub-ends" id="scrubHi">400</span>
+      <span class="scrub-val" id="frameVal">400</span>
+    </div>
+    <div class="readout" id="readout"></div>
+    <div class="plot">
+      <canvas class="scree-canvas" id="scree"></canvas>
+      <div class="tip" id="tip"></div>
+    </div>
+    <div class="legend" id="legend"><span class="hint">drag a box to zoom · double-click reset</span></div>
+  </div>
+
+  <!-- ===================== SECTION B: Q fixed vs changing ===================== -->
+  <div class="panel">
+    <div class="sec-head"><h2>Q changing vs Q fixed</h2><span class="tag" id="qsub"></span></div>
+    <p class="lede">Three ways of choosing the <b>function Hessian Q = ∇²f</b>, everything else identical:
+      <b style="color:var(--evo)">evolving</b> (recomputed at θ<sub>t</sub> every step),
+      <b style="color:var(--fix)">fixed at init</b> (the true ∇²f(θ₀), frozen), and
+      <b style="color:var(--rnd)">random-fixed</b> (a random symmetric Q drawn at θ₀, Frobenius-matched to the
+      true one — same magnitude, random structure). The GD step never uses Q, so <b>loss, Hessian sharpness, and
+      the residual↔NTK alignment are identical</b> for all three (they coincide). The three <b>diverge</b> only
+      in the quantities that actually use Q — the <b>M<sub>r</sub> = Σr<sub>k</sub>Q<sub>k</sub> eigenvalues</b>
+      and the <b>residual↔M<sub>r</sub>-eigenvector alignment</b>: fixed-Q overestimates the curvature as the net
+      leaves θ₀, while random-Q (wrong structure) barely aligns with the residual. The bottom row ports the
+      widget's <b>§6 phases-of-learning</b> diagnostics — the <b>Q<sub>r</sub>→J<sup>T</sup>r alignment</b>
+      (phase 1), the <b>power iteration</b> (phase 2·1, Q-independent), and the <b>residual dominance</b>
+      ‖J̇·r‖−‖J·ṙ‖ (phase 2·2), whose sign flip marks progressive-sharpening onset — each three-way where it
+      depends on Q.</p>
+    <div class="chips" id="qRunChips"></div>
+    <div class="grid2">
+      <div class="mini"><h3>Training loss</h3><p class="cap">MSE · log scale · <b>identical</b> for all three Q modes</p>
+        <canvas id="m_loss"></canvas></div>
+      <div class="mini"><h3>Hessian sharpness λ₁(∇²L)</h3><p class="cap"><b>Q-independent</b> · climbs to the 2/lr Edge-of-Stability line</p>
+        <canvas id="m_sharp"></canvas>
+        <div class="milegend"><span><i style="background:var(--hessian)"></i>λ₁(∇²L)</span><span style="color:var(--amber)"><i class="dash"></i>2/lr</span></div></div>
+      <div class="mini"><h3>M<sub>r</sub> top eigenvalue λ₁(Σr<sub>k</sub>Q<sub>k</sub>)</h3><p class="cap"><b>Q-dependent</b> · residual-weighted curvature, three ways of choosing Q</p>
+        <canvas id="m_qr"></canvas><div class="milegend modeleg"></div></div>
+      <div class="mini"><h3>M<sub>r</sub> bottom eigenvalue λ<sub>min</sub>(Σr<sub>k</sub>Q<sub>k</sub>)</h3><p class="cap"><b>Q-dependent</b> · the most-negative curvature direction</p>
+        <canvas id="m_qrbot"></canvas><div class="milegend modeleg"></div></div>
+      <div class="mini"><h3>Residual ↔ NTK-eigenvector alignment</h3><p class="cap"><b>Q-independent</b> (§21 NTK panel) · |cos(r<sub>t</sub>, v<sub>k</sub>)|, top-4 NTK eigenvectors</p>
+        <canvas id="m_ntk"></canvas>
+        <div class="milegend" id="ntkleg"></div></div>
+      <div class="mini"><h3>Q<sub>r</sub>→J<sup>T</sup>r alignment <span style="color:var(--faint);font-weight:400">· phase 1</span></h3><p class="cap"><b>Q-dependent</b> (§6 phases-of-learning) · |cos(Jᵀr<sub>t</sub>, u₁)|, top M<sub>r</sub> eigenvector — how much the GN-gradient sits in the top curvature direction</p>
+        <canvas id="m_mralign"></canvas><div class="milegend modeleg"></div></div>
+      <div class="mini"><h3>Power iteration <span style="color:var(--faint);font-weight:400">· phase 2·1</span></h3><p class="cap"><b>Q-independent</b> (§6) · ‖Jᵀr‖ the GN-gradient norm and λ₁(JJᵀ) the top NTK eigenvalue — the direction the residual is amplified along</p>
+        <canvas id="m_poweriter"></canvas>
+        <div class="milegend"><span><i style="background:var(--hessian)"></i>‖Jᵀr‖</span><span><i style="background:var(--amber)"></i>λ₁(JJᵀ)</span></div></div>
+      <div class="mini"><h3>Residual dominance <span style="color:var(--faint);font-weight:400">· phase 2·2</span></h3><p class="cap"><b>Q-dependent</b> (§6) · ‖J̇·r‖−‖J·ṙ‖ = ‖M<sub>r</sub>∇L‖−‖JᵀJ∇L‖ — curvature growth vs NTK decay; the sign flip marks progressive-sharpening onset</p>
+        <canvas id="m_resdom"></canvas><div class="milegend modeleg"></div></div>
+    </div>
+  </div>
+
+  <p class="foot">
+    <b>Runs</b> — the actual prediction-widget configs (chebyshev / ksparse-parity / saddle),
+    each an MLP reproduced deterministically from its capture params (P&nbsp;=&nbsp;<span id="pval"></span>).
+    <b>Section 1</b>: every operator materialized and exactly diagonalized at 16 checkpoints over training
+    (the slider), then log-subsampled. <b>Section 2</b>: statistics recomputed each step along the same run,
+    with Q evolving (θ<sub>t</sub>), fixed at θ₀, and random-fixed at θ₀ — the widget's <code>qinit</code>
+    evolve / fix / gauss modes.<br>
+    <b>JJᵀ</b> is drawn from the eigenvalues of the p×p JᵀJ, whose nonzero spectrum equals the NTK JJᵀ's.
+    All four operators are on the mean-loss (÷N) scale so the loss Hessian ≈ ΣQ-part + Qr holds.
+  </p>
+</div>
+
+<script>
+const SPECTRA = __SPECTRA__;
+const QCOMPARE = __QCOMPARE__;
+
+/* ---------- theme toggle ---------- */
+(function(){const b=document.getElementById('themebtn');b.onclick=()=>{
+  const cur=document.documentElement.getAttribute('data-theme')
+    || (matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');
+  const nxt=cur==='dark'?'light':'dark';document.documentElement.setAttribute('data-theme',nxt);
+  redrawAll();};})();
+const css=v=>getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+/* ---------- canvas helpers ---------- */
+function setup(cv){const dpr=Math.max(1,window.devicePixelRatio||1);const r=cv.getBoundingClientRect();
+  cv.width=Math.round(r.width*dpr);cv.height=Math.round(r.height*dpr);const c=cv.getContext('2d');
+  c.setTransform(dpr,0,0,dpr,0,0);return {c,w:r.width,h:r.height};}
+const SUP={'-':'⁻','0':'⁰','1':'¹','2':'²','3':'³','4':'⁴','5':'⁵','6':'⁶','7':'⁷','8':'⁸','9':'⁹'};
+const sup=n=>String(n).split('').map(ch=>SUP[ch]||ch).join('');
+const pow10=k=>'10'+sup(k);
+
+/* ---------- symlog for signed eigenvalues ---------- */
+function makeSymlog(lt){return x=>{const a=Math.abs(x);return a<=lt? x/lt : Math.sign(x)*(1+Math.log10(a/lt));};}
+
+/* ================= SECTION A : interactive scree ================= */
+const OPS = SPECTRA.operators;                       // [{key,label,color}]
+const OPCOL = {qr:css('--qr'),sumQ:css('--sumQ'),jjt:css('--jjt'),hessian:css('--hessian')};
+let curRun = 0, curFrame = 0;                        // curFrame = index into the current run's frames[] (the slider)
+const hidden = new Set();
+let view = null;                                     // {xmin,xmax,ymin,ymax} in log-rank / symlog units
+let symlog=null, lt=1e-9;
+
+// series for the CURRENTLY-SELECTED frame (what the scree plot draws)
+function activeSeries(){const run=SPECTRA.runs[curRun];
+  return OPS.filter(o=>!hidden.has(o.key)).map(o=>({key:o.key,label:o.label,
+    color:OPCOL[o.key]||o.color,pts:run.series[o.key][curFrame]}));}
+
+// fit the axes over ALL frames of the run (so they stay fixed while you scrub — you see real evolution)
+function fitView(){
+  const run=SPECTRA.runs[curRun];
+  const vis=OPS.filter(o=>!hidden.has(o.key)); const ops=vis.length?vis:OPS;
+  let xmax=1,ymin=1e30,ymax=-1e30,amin=1e30;
+  ops.forEach(o=>run.series[o.key].forEach(frame=>frame.forEach(([rk,l])=>{
+    xmax=Math.max(xmax,rk);const a=Math.abs(l);if(a>1e-14)amin=Math.min(amin,a);})));
+  lt=Math.pow(10,Math.floor(Math.log10(amin>1e29?1e-6:amin)));lt=Math.min(Math.max(lt,1e-12),1e-2);
+  symlog=makeSymlog(lt);
+  ops.forEach(o=>run.series[o.key].forEach(frame=>frame.forEach(([rk,l])=>{
+    const y=symlog(l);ymin=Math.min(ymin,y);ymax=Math.max(ymax,y);})));
+  const yp=(ymax-ymin)*0.06+.2;
+  view={xmin:0,xmax:Math.log10(xmax)+0.02,ymin:ymin-yp,ymax:ymax+yp};
+}
+
+function drawScree(){
+  const cv=document.getElementById('scree');const {c,w,h}=setup(cv);
+  const padL=58,padR=16,padT=14,padB=34,pw=w-padL-padR,ph=h-padT-padB;
+  const inkC=css('--ink'),muteC=css('--muted'),gridC=css('--grid'),lineC=css('--line'),faintC=css('--faint');
+  const X=lr=>padL+(lr-view.xmin)/(view.xmax-view.xmin)*pw;
+  const Yv=s=>padT+(view.ymax-s)/(view.ymax-view.ymin)*ph;
+  c.clearRect(0,0,w,h);
+  // --- gridlines + ticks ---
+  c.font='11px '+css('--mono');c.textBaseline='middle';
+  // x (log rank)
+  const xk0=Math.floor(view.xmin),xk1=Math.ceil(view.xmax);
+  c.strokeStyle=gridC;c.fillStyle=faintC;c.textAlign='center';c.lineWidth=1;
+  for(let k=xk0;k<=xk1;k++){for(let m=1;m<10;m++){const lr=k+Math.log10(m);
+    if(lr<view.xmin||lr>view.xmax)continue;const px=X(lr);
+    c.globalAlpha=m===1?.9:.28;c.beginPath();c.moveTo(px,padT);c.lineTo(px,padT+ph);c.stroke();
+    if(m===1){c.globalAlpha=1;c.fillText(pow10(k),px,padT+ph+14);}}}
+  c.globalAlpha=1;
+  // y (symlog) — signed powers of 10 within range + zero, THINNED to ≤12 labels so the axis stays readable
+  let yticks=[];
+  const klo=Math.floor(Math.log10(lt));
+  const khi=Math.ceil(Math.log10(lt)+Math.max(Math.abs(view.ymin),Math.abs(view.ymax)))+1;
+  for(const sgn of [1,-1]) for(let k=klo;k<=khi;k++){
+    const val=sgn*Math.pow(10,k);const s=symlog(val);
+    if(s>=view.ymin&&s<=view.ymax)yticks.push({val,s,k,sgn});}
+  if(0>=view.ymin&&0<=view.ymax)yticks.push({val:0,s:0,k:null,sgn:1});
+  yticks.sort((a,b)=>a.s-b.s);
+  const MAXY=12;
+  if(yticks.length>MAXY){const st=Math.ceil(yticks.length/MAXY);
+    yticks=yticks.filter((t,i)=>t.val===0||i===0||i===yticks.length-1||i%st===0);}
+  c.textAlign='right';
+  yticks.forEach(t=>{const py=Yv(t.s);
+    c.strokeStyle=t.val===0?lineC:gridC;c.globalAlpha=t.val===0?.9:.5;
+    c.beginPath();c.moveTo(padL,py);c.lineTo(padL+pw,py);c.stroke();c.globalAlpha=1;
+    c.fillStyle=faintC;const lab=t.val===0?'0':(t.sgn<0?'-':'')+pow10(t.k);
+    c.fillText(lab,padL-8,py);});
+  // axis labels
+  c.fillStyle=muteC;c.textAlign='center';c.font='11px '+css('--sans');
+  c.fillText('rank  (1 … P)',padL+pw/2,h-3);
+  c.save();c.translate(13,padT+ph/2);c.rotate(-Math.PI/2);c.fillText('λ  (signed)',0,0);c.restore();
+  // --- series ---
+  c.save();c.beginPath();c.rect(padL,padT,pw,ph);c.clip();
+  activeSeries().forEach(s=>{
+    c.strokeStyle=s.color;c.lineWidth=1.9;c.globalAlpha=.95;c.beginPath();
+    s.pts.forEach(([rk,l],i)=>{const px=X(Math.log10(rk)),py=Yv(symlog(l));
+      i===0?c.moveTo(px,py):c.lineTo(px,py);});c.stroke();
+    c.globalAlpha=1;c.fillStyle=s.color;
+    s.pts.forEach(([rk,l])=>{const px=X(Math.log10(rk)),py=Yv(symlog(l));
+      if(px<padL-2||px>padL+pw+2)return;c.beginPath();c.arc(px,py,2.1,0,7);c.fill();});
+  });
+  c.restore();
+  // series end-labels
+  c.font='11px '+css('--mono');c.textAlign='left';
+  activeSeries().forEach(s=>{const last=s.pts[s.pts.length-1];
+    const px=Math.min(X(Math.log10(last[0])),padL+pw-2),py=Yv(symlog(last[1]));
+    c.fillStyle=s.color;c.fillText(s.label,Math.min(px+5,padL+pw-34),py);});
+}
+
+/* zoom / pan / reset / hover */
+function bindScree(){
+  const cv=document.getElementById('scree');const tip=document.getElementById('tip');
+  const geo=()=>{const r=cv.getBoundingClientRect();return {r,padL:58,padR:16,padT:14,padB:34,
+    pw:r.width-58-16,ph:r.height-14-34};};
+  // zoom is region-select only (drag a box); no scroll-wheel zoom, no pan.
+  let sel=null;  // {x0,y0,x1,y1} screen-px + captured view v
+  function drawSel(){const ctx=cv.getContext('2d');
+    const x=Math.min(sel.x0,sel.x1),y=Math.min(sel.y0,sel.y1),w=Math.abs(sel.x1-sel.x0),h=Math.abs(sel.y1-sel.y0);
+    ctx.save();ctx.globalAlpha=0.14;ctx.fillStyle=css('--accent');ctx.fillRect(x,y,w,h);
+    ctx.globalAlpha=1;ctx.strokeStyle=css('--accent');ctx.setLineDash([4,3]);ctx.lineWidth=1.2;ctx.strokeRect(x,y,w,h);ctx.restore();}
+  cv.addEventListener('pointerdown',e=>{const {r}=geo();const mx=e.clientX-r.left,my=e.clientY-r.top;
+    sel={x0:mx,y0:my,x1:mx,y1:my,v:{...view}};cv.setPointerCapture(e.pointerId);tip.style.opacity=0;});
+  cv.addEventListener('pointermove',e=>{const {r,padL,padT,pw,ph}=geo();
+    if(sel){sel.x1=e.clientX-r.left;sel.y1=e.clientY-r.top;drawScree();drawSel();return;}
+    // hover: nearest point
+    const mx=e.clientX-r.left,my=e.clientY-r.top;let best=null,bd=1e9;
+    const X=lr=>padL+(lr-view.xmin)/(view.xmax-view.xmin)*pw,Yv=s=>padT+(view.ymax-s)/(view.ymax-view.ymin)*ph;
+    activeSeries().forEach(s=>s.pts.forEach(([rk,l])=>{const px=X(Math.log10(rk)),py=Yv(symlog(l));
+      const d=(px-mx)**2+(py-my)**2;if(d<bd){bd=d;best={rk,l,s,px,py};}}));
+    if(best&&bd<220){tip.style.opacity=1;tip.style.left=Math.min(best.px+12,r.width-120)+'px';
+      tip.style.top=(best.py+10)+'px';
+      tip.innerHTML=`<span style="color:${best.s.color}">${best.s.label}</span> · <span class="tk">rank</span> ${best.rk} · <span class="tk">λ</span> ${best.l.toExponential(3)}`;}
+    else tip.style.opacity=0;});
+  const end=()=>{if(!sel)return;const {padL,padT,pw,ph}=geo();const v=sel.v;
+    const x0=Math.min(sel.x0,sel.x1),x1=Math.max(sel.x0,sel.x1),y0=Math.min(sel.y0,sel.y1),y1=Math.max(sel.y0,sel.y1);
+    sel=null;
+    if(x1-x0>8&&y1-y0>8){ // only a real drag zooms; a click is ignored
+      const lx=px=>v.xmin+(px-padL)/pw*(v.xmax-v.xmin);   // screen-x → log10(rank)
+      const sy=py=>v.ymax-(py-padT)/ph*(v.ymax-v.ymin);   // screen-y → symlog(λ)
+      view.xmin=lx(x0);view.xmax=lx(x1);view.ymin=sy(y1);view.ymax=sy(y0);}
+    drawScree();};
+  cv.addEventListener('pointerup',end);
+  cv.addEventListener('pointerleave',()=>{tip.style.opacity=0;if(sel){sel=null;drawScree();}});
+  cv.addEventListener('dblclick',()=>{fitView();drawScree();});
+}
+
+function renderReadout(){
+  const run=SPECTRA.runs[curRun];const fi=curFrame;const np=k=>run.npos[k][fi];
+  const parts=[`<span class="k">iteration</span> <span class="v">${run.frames[fi].toLocaleString()}</span>`,
+    `<span class="k">#λ&gt;0:</span> <span class="v">H ${np('hessian')}<span class="k">+</span> · Qr ${np('qr')}<span class="k">+</span> · ΣQ ${np('sumQ')}<span class="k">+</span> · JJᵀ ${np('jjt')}<span class="k">+</span></span>`,
+    `<span class="k">P =</span> <span class="v">${run.P.toLocaleString()}</span>`];
+  document.getElementById('readout').innerHTML=parts.join('<span class="k">·</span>');
+}
+function updateSlider(){
+  const run=SPECTRA.runs[curRun];const s=document.getElementById('frameSlider');
+  s.max=run.frames.length-1;s.value=curFrame;
+  s.style.setProperty('--fill',(curFrame/(run.frames.length-1)*100)+'%');
+  document.getElementById('frameVal').textContent=run.frames[curFrame].toLocaleString();
+  document.getElementById('scrubLo').textContent=run.frames[0];
+  document.getElementById('scrubHi').textContent=run.frames[run.frames.length-1];
+}
+function setRun(i){
+  curRun=i;curFrame=SPECTRA.runs[i].frames.length-1;   // land on the final iteration
+  fitView();drawScree();renderReadout();renderRunChips();updateSlider();
+}
+function renderRunChips(){
+  const box=document.getElementById('runChips');box.innerHTML='';
+  SPECTRA.runs.forEach((r,i)=>{const b=document.createElement('button');b.className='chip';
+    b.setAttribute('aria-pressed',i===curRun);b.textContent=r.label;
+    b.onclick=()=>setRun(i);box.appendChild(b);});
+}
+function bindSlider(){
+  const s=document.getElementById('frameSlider');
+  s.addEventListener('input',()=>{curFrame=+s.value;
+    s.style.setProperty('--fill',(curFrame/(+s.max||1)*100)+'%');
+    drawScree();renderReadout();
+    document.getElementById('frameVal').textContent=SPECTRA.runs[curRun].frames[curFrame].toLocaleString();});
+}
+function renderLegend(){
+  const box=document.getElementById('legend');box.querySelectorAll('.lg').forEach(e=>e.remove());
+  const frag=document.createDocumentFragment();
+  OPS.forEach(o=>{const b=document.createElement('button');b.className='lg';
+    b.setAttribute('aria-pressed',!hidden.has(o.key));
+    b.innerHTML=`<span class="sw" style="background:${OPCOL[o.key]||o.color}"></span><span class="name">${o.label}</span>`;
+    b.onclick=()=>{hidden.has(o.key)?hidden.delete(o.key):hidden.add(o.key);fitView();drawScree();renderLegend();};
+    frag.appendChild(b);});
+  box.insertBefore(frag,box.firstChild);
+}
+
+/* ================= SECTION B : mini line charts ================= */
+function lineChart(id,opts){
+  const cv=document.getElementById(id);const {c,w,h}=setup(cv);
+  const padL=opts.padL||44,padR=10,padT=8,padB=22,pw=w-padL-padR,ph=h-padT-padB;
+  const gridC=css('--grid'),faintC=css('--faint'),muteC=css('--muted');
+  const xs=opts.x;const xmin=xs[0],xmax=xs[xs.length-1];
+  let ymin=opts.ymin,ymax=opts.ymax;
+  const vals=opts.series.flatMap(s=>s.y).concat(opts.hline!=null?[opts.hline]:[]);
+  const logY=opts.logY;
+  const tf=logY?(v=>Math.log10(Math.max(v,opts.floor||1e-12))):(v=>v);
+  if(ymin==null)ymin=Math.min(...vals.map(tf));if(ymax==null)ymax=Math.max(...vals.map(tf));
+  const pad=(ymax-ymin)*0.08||1;ymin-=pad;ymax+=pad;
+  const X=v=>padL+(v-xmin)/(xmax-xmin||1)*pw,Y=v=>padT+(ymax-tf(v))/(ymax-ymin||1)*ph;
+  c.clearRect(0,0,w,h);
+  c.font='9.5px '+css('--mono');c.textBaseline='middle';c.strokeStyle=gridC;c.fillStyle=faintC;c.lineWidth=1;
+  c.textAlign='right';
+  // y ticks — for log axes use integer powers of 10 (no rounding-to-duplicate labels)
+  if(logY){
+    let ks=[];for(let k=Math.ceil(ymin-1e-9);k<=Math.floor(ymax+1e-9);k++)ks.push(k);
+    if(ks.length>5){const st=Math.ceil(ks.length/5);ks=ks.filter((k,i)=>i%st===0);}
+    ks.forEach(k=>{const py=padT+ph*(1-(k-ymin)/(ymax-ymin||1));
+      c.strokeStyle=gridC;c.beginPath();c.moveTo(padL,py);c.lineTo(padL+pw,py);c.stroke();
+      c.fillStyle=faintC;c.fillText(pow10(k),padL-6,py);});
+  } else {
+    const nY=4;for(let i=0;i<=nY;i++){const gv=ymin+(ymax-ymin)*i/nY;const py=padT+ph*(1-i/nY);
+      c.strokeStyle=gridC;c.beginPath();c.moveTo(padL,py);c.lineTo(padL+pw,py);c.stroke();
+      c.fillStyle=faintC;c.fillText(Math.abs(gv)>=100?gv.toFixed(0):gv.toFixed(gv%1?1:0),padL-6,py);}
+  }
+  // x ticks
+  c.textAlign='center';const nX=4;for(let i=0;i<=nX;i++){const xv=xmin+(xmax-xmin)*i/nX;
+    c.fillText(Math.round(xv),X(xv),h-6);}
+  // hline (2/lr)
+  if(opts.hline!=null){c.strokeStyle=css('--amber');c.lineWidth=1.3;c.setLineDash([4,3]);
+    c.beginPath();c.moveTo(padL,Y(opts.hline));c.lineTo(padL+pw,Y(opts.hline));c.stroke();c.setLineDash([]);}
+  // series
+  c.save();c.beginPath();c.rect(padL,padT,pw,ph);c.clip();
+  opts.series.forEach(s=>{c.strokeStyle=s.color;c.lineWidth=s.w||1.8;c.beginPath();
+    s.y.forEach((v,i)=>{const px=X(xs[i]),py=Y(v);i===0?c.moveTo(px,py):c.lineTo(px,py);});c.stroke();});
+  c.restore();
+  // x label
+  c.fillStyle=muteC;c.textAlign='center';c.font='9.5px '+css('--sans');
+  if(opts.xlabel)c.fillText(opts.xlabel,padL+pw/2,h+2>h?h-1:h-1);
+}
+const NTKC=['#3b6fd4','#5b8def','#8b5cf6','#c05fd0'];
+let curQ=0;
+function renderQChips(){
+  const box=document.getElementById('qRunChips');box.innerHTML='';
+  QCOMPARE.runs.forEach((r,i)=>{const b=document.createElement('button');b.className='chip';
+    b.setAttribute('aria-pressed',i===curQ);b.textContent=r.label;
+    b.onclick=()=>{curQ=i;drawMinis();renderQChips();};box.appendChild(b);});
+}
+function drawMinis(){
+  const Q=QCOMPARE.runs[curQ];const f=Q.frames;
+  document.getElementById('qsub').textContent=`${Q.label} · P ${Q.P} · 2/lr = ${Q.twoOverLr}`;
+  const modeSeries=o=>[{y:o.evolve,color:css('--evo')},{y:o.fixed,color:css('--fix')},{y:o.random,color:css('--rnd')}];
+  lineChart('m_loss',{x:f,logY:true,floor:1e-9,series:[{y:Q.loss,color:css('--hessian')}]});
+  lineChart('m_sharp',{x:f,hline:Q.twoOverLr,series:[{y:Q.sharpness,color:css('--hessian')}]});
+  lineChart('m_qr',{x:f,logY:true,floor:1e-3,series:modeSeries(Q.qr_top)});
+  lineChart('m_qrbot',{x:f,series:modeSeries(Q.qr_bot)});
+  lineChart('m_ntk',{x:f,ymin:0,ymax:1,series:Q.ntk_align.map((y,k)=>({y,color:NTKC[k],w:1.6}))});
+  lineChart('m_mralign',{x:f,ymin:0,ymax:1,series:modeSeries(Q.mr_align)});
+  lineChart('m_poweriter',{x:f,logY:true,floor:1e-4,series:[{y:Q.gnorm,color:css('--hessian')},{y:Q.ntk_top,color:css('--amber')}]});
+  lineChart('m_resdom',{x:f,hline:0,series:modeSeries(Q.res_dom)});
+}
+function renderModeLeg(){
+  const html=`<span><i style="background:var(--evo)"></i>Q evolving (θ<sub>t</sub>)</span>`
+    +`<span><i style="background:var(--fix)"></i>Q fixed at init (θ₀)</span>`
+    +`<span><i style="background:var(--rnd)"></i>Q random-fixed (θ₀)</span>`;
+  document.querySelectorAll('.modeleg').forEach(e=>e.innerHTML=html);
+}
+function renderNtkLeg(){const box=document.getElementById('ntkleg');
+  box.innerHTML=[0,1,2,3].map(k=>`<span style="color:${NTKC[k]}"><i style="background:${NTKC[k]}"></i>v${sup(k+1)}</span>`).join('');}
+
+/* ================= boot ================= */
+function redrawAll(){if(view){drawScree();}drawMinis();}
+function init(){
+  document.getElementById('pval').textContent=SPECTRA.runs.map(r=>r.P.toLocaleString()).join(' / ');
+  curFrame=SPECTRA.runs[curRun].frames.length-1;      // start on the final iteration
+  renderRunChips();renderLegend();fitView();renderReadout();bindScree();bindSlider();updateSlider();
+  renderQChips();renderNtkLeg();renderModeLeg();redrawAll();
+}
+window.addEventListener('resize',()=>{clearTimeout(window._rt);window._rt=setTimeout(redrawAll,120);});
+init();
+</script>

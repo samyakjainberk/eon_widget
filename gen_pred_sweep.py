@@ -112,11 +112,14 @@ def main():
     ap.add_argument("--rerun-missing", action="store_true", help="only (re)submit captures whose .min.json is absent (e.g. failed runs)")
     ap.add_argument("--opt-sweep", action="store_true", help="optimizer-variant MSE grid (tanh MLP × sign/spectral/gaussnewton × per-opt LRs) instead of the main grid")
     ap.add_argument("--tag", default="psweep", help="manifest + job-name prefix (use a UNIQUE tag per submission so re-runs don't overwrite each other's manifests, e.g. --tag vgg / --tag opt)")
+    ap.add_argument("--qspec", action="store_true", help="append `--set qspec=1` to every capture (Q-eigenspectrum: FULL spectrum for MLP p≤20000). Adds ~0.4 GPU-h/capture; SURGICAL — does NOT touch PRED_ON, so already-running jobs are unaffected.")
     a = ap.parse_args()
     if not (a.dry_run or a.submit):
         a.dry_run = True
 
     caps = opt_captures() if a.opt_sweep else captures(a.archs, a.datasets)
+    if a.qspec:                                          # Q-eigenspectrum: append `--set qspec=1`; pad est_h for the extra ~60-snapshot full-spectrum eig
+        caps = [(n, c + " --set qspec=1", e + 0.4) for (n, c, e) in caps]
     if a.rerun_missing:
         caps = [(n, c, e) for (n, c, e) in caps if not os.path.exists(f"{DIR}/runs_captured/{n}.min.json")]
     jobs = pack(caps)

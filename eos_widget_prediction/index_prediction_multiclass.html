@@ -115,8 +115,8 @@
   <div class="panel">
     <div class="panel-title">Dataset &amp; architecture <span style="color:#94a3b8;font-weight:400;text-transform:none">· GPU backend only</span></div>
     <div class="grid">
-      <div class="ctl"><label>dataset (multiclass · M = n·d)</label><select id="dataset"><option value="cifar10" selected>CIFAR-10 (10-class)</option><option value="mnist">MNIST-10 (10-class)</option><option value="maxfind">max-input finder (10-class)</option><option value="modadd">modular addition mod 11 (11-class)</option></select></div>
-      <div class="ctl"><label>architecture</label><select id="arch"><option value="mlp" selected>MLP</option><option value="cnn">CNN</option><option value="vgg11">VGG11</option><option value="gpt">mini-GPT</option><option value="diaglin">diagonal linear (β=u⊙v · AGF)</option></select></div>
+      <div class="ctl"><label>dataset (multiclass · M = n·d)</label><select id="dataset"><option value="cifar10" selected>CIFAR-10 (10-class)</option><option value="mnist">MNIST-10 (10-class)</option><option value="maxfind">max-input finder (10-class)</option><option value="modadd">modular addition mod 11 (11-class)</option><option value="iclreg">in-context linear regression (1-layer linear attention · saddle-to-saddle · D=indim,N=seqlen)</option></select></div>
+      <div class="ctl"><label>architecture</label><select id="arch"><option value="mlp" selected>MLP</option><option value="cnn">CNN</option><option value="vgg11">VGG11</option><option value="gpt">mini-GPT</option><option value="diaglin">diagonal linear (β=u⊙v · AGF)</option><option value="lsa">linear self-attention (ICL · arXiv:2501.16265)</option></select></div>
       <div class="ctl"><label>loss</label><select id="loss"><option value="mse" selected>MSE</option><option value="ce">cross-entropy</option></select></div>
       <div class="ctl"><label>CNN/VGG channel mult</label><input id="chmul" type="number" value="0.25" min="0.05" max="2" step="0.05"></div>
       <div class="ctl"><label>GPT d_model</label><input id="dmodel" type="number" value="64" min="8" max="512" step="8"></div>
@@ -160,6 +160,19 @@
       <div class="ctl"><label>init scheme</label><select id="initscheme"><option value="default" selected>default (scale/√fan_in)</option><option value="mup">muP</option><option value="xavier_normal">Xavier normal</option><option value="xavier_uniform">Xavier uniform</option><option value="kaiming_normal">Kaiming normal</option><option value="kaiming_uniform">Kaiming uniform</option><option value="custom">custom (Gaussian std)</option></select></div>
       <div class="ctl"><label>steps</label><input id="steps" type="number" value="400" min="20" max="10000" step="20"></div>
       <div class="ctl"><label>seed</label><input id="seed" type="number" value="0" step="1"></div>
+      <div class="ctl"><label>Q init (fn-Hessian)</label><select id="qinit" title="How the per-sample function-Hessian Q_k=∇²f_k enters ALL prediction trackers (Pred-3/4/5.1/6). 'evolve' = live Q (current). 'fix' = freeze Q at iteration t (J stays live). random = dense symmetric iid Q, Frobenius-matched to the true ‖Q_k(θ_t)‖ per sample — small nets only.">
+        <option value="evolve" selected>evolve (live Q · current)</option>
+        <option value="fix">fix Q at iter t</option>
+        <option value="gauss">random iid Gaussian</option>
+        <option value="bern">random iid Bernoulli</option>
+        <option value="unif">random iid Uniform</option></select></div>
+      <div class="ctl"><label>Q fix/rand iter t</label><input id="qfixt" type="number" value="0" min="0" step="1" title="Iteration t at which Q is frozen (fix) or the random Q is anchored/Frobenius-matched (random). Default 0 = θ₀."></div>
+      <div class="ctl"><label>Q rand seed</label><input id="qseed" type="number" value="0" step="1" title="RNG seed for the random-Q modes (gauss/bern/unif)."></div>
+      <div class="ctl"><label>SLQ mode (spectra)</label><select id="slqblock" title="Stochastic Lanczos Quadrature for the H / G / S / loss-Hessian spectral-density plots. 'block SLQ (b=4)' is the DEFAULT — block Lanczos advancing 4 probe vectors together resolves clustered/degenerate eigenvalues with markedly lower variance / closer-to-true density at the same iteration count (validated as the accuracy-per-matvec sweet spot vs exact eig). 'standard' = single-vector SLQ (b=1).">
+        <option value="1">standard SLQ</option>
+        <option value="2">block SLQ (b=2)</option>
+        <option value="4" selected>block SLQ (b=4)</option>
+        <option value="8">block SLQ (b=8)</option></select></div>
     </div>
   </div>
   <div class="panel">
@@ -168,7 +181,7 @@
       <div class="ctl"><label>n (top/bottom eigs)</label><input id="neig" type="number" value="3" min="1" max="8" step="1"></div>
       <div class="ctl"><label>k (which single eigvec)</label><input id="kth" type="number" value="1" min="1" max="8" step="1"></div>
       <div class="ctl"><label>eig every (steps)</label><input id="eigevery" type="number" value="1" min="1" max="20" step="1"></div>
-      <div class="ctl"><label title="§4 SLQ spectral density (H · Gauss-Newton G · residual S · full loss Hessian ∇²L) is refreshed every this-many iterations. Default 10; lower = smoother-in-time but heavier.">SLQ every (iters)</label><input id="slqevery" type="number" value="10" min="1" max="200" step="1"></div>
+      <div class="ctl"><label title="§4 SLQ spectral density (H · Gauss-Newton G · residual S · full loss Hessian ∇²L) is refreshed every this-many iterations. Default 10; lower = smoother-in-time but heavier.">SLQ every (iters)</label><input id="slqevery" type="number" value="5" min="1" max="200" step="1"></div>
       <div class="ctl"><label title="The heaviest projection panels (§7 FH-eigvec projections, §8 FH-reshape SVD) compute every N-th diagnostic tick instead of every step, so runs stay responsive. The cheap core (loss/sharpness/eigenvalues/§9 theory/§7a) updates every step. Set 1 to compute everything every step.">heavy every (ticks)</label><input id="heavyevery" type="number" value="4" min="1" max="50" step="1"></div>
       <div class="ctl"><label title="§10 cubic-approximation window: every N steps freeze θ₀, J₀, Q₀ and the 3rd-derivative tensor T, then propagate J & Q over the window to predict the NTK-σ₁ change. Smaller = more frequent re-anchoring and cheaper (cost is O(window²) HVPs).">cubic window</label><input id="cubicapprox" type="number" value="10" min="2" max="50" step="1"></div>
       <div class="ctl"><label title="§11 3D-grid cap: skip the N×N×N Hessian–NTK grids when N·d_out exceeds this. The grid is N³ points and costs N Hessian-vector products, so it is feasible only for small N.">3D-grid cap (N·d_out)</label><input id="grid3dcap" type="number" value="500" min="1" max="600" step="1"></div>
@@ -228,6 +241,7 @@
   <label title="Early-dynamics stats (NOT a prediction) — σ-weighted Jᵀr projection on ±M_r eigenvectors (top/bottom-50) + the mean principal angle of the H=ΣQ_k and M_r eigenspaces at lags 1/2/5/10. Sits ABOVE the prediction panels. OFF by default (two Lanczos per step)."><input type="checkbox" id="enEDS"> Early-dynamics stats</label>
   <label title="Self-stabilization mechanism (NOT a prediction) — cos(∇sharpness, ±k eigenvectors of the PRECONDITIONED Hessian H_P=P^½∇²L P^½) + two projected-gradient cosines, over training. Works for gd/sign/spectral/gaussnewton: the gradient stays the raw ∇L, only the Hessian is preconditioned (P per optimizer). Sits right above Prediction-1&2. OFF by default (Lanczos + 2 HVPs per eig-tick)."><input type="checkbox" id="enSS" onchange="toggleSS()"> Self-stabilization</label>
   <label title="Q eigenspectrum (NOT a prediction) — the top⊕bottom-k eigenSPECTRA of the residual-weighted function Hessian Q_r=Σ_k r_kQ_k and the unweighted H=Σ_k Q_k, computed EVERY iteration, shown side-by-side as a scree, with a slider to scrub to any past iteration. For eyeballing the eigenstructure of Q over training. OFF by default (two Lanczos per step)."><input type="checkbox" id="enQspec" onchange="toggleQspec()"> Q eigenspectrum</label>
+    <label title="§6 FIXED-BASIS (NOT a prediction) — the §6 phases plotted against a ranking FROZEN AT INITIALIZATION. At t=0 we eigendecompose M_r=Σr_kQ_k and the Gauss-Newton JᵀJ and FREEZE their top-k eigenvectors {u_i}, ordered by their INIT eigenvalue. Every snapshot we then read, for each FIXED direction u_i: its curvature u_iᵀM_r u_i / ‖Ju_i‖² and its alignment |cos(Jᵀr,u_i)|. Because the ranking never re-sorts, rank i always means the SAME direction — so you can watch how each individual init-direction is learned (grows/shrinks/re-aligns). Scrubber to any past step. OFF by default."><input type="checkbox" id="enS6f" onchange="toggleS6f()"> §6 fixed-basis (init ranking)</label>
   <span class="tt" style="margin-left:14px">Base panels (feed the forecasts)</span>
   <label><input type="checkbox" id="en1" checked> 1 · loss / sharpness / residual</label>
   <label><input type="checkbox" id="en2" checked> 2 · eig top-n</label>
@@ -391,15 +405,36 @@
 <div id="sec_qspec" style="border:2px solid #0369a1;border-radius:8px;padding:6px 14px 12px;margin:6px 0 18px;background:#f0f9ff;display:none">
 <h2 style="color:#0369a1;margin-top:4px">Q eigenspectrum — Q_r &amp; ΣQ_i over training</h2>
 <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:2px 0 6px;font-size:13px;color:#374151">
-  <label title="Number of top ⊕ bottom eigenvalues of Q_r / H computed per iteration (via Lanczos). More = finer-grained but slower. Default 40.">±eigs per op&nbsp;<input id="qspeck" value="40" style="width:48px"></label>
+  <label title="signed-log₁₀ y-axis: sign(λ)·log₁₀(1+|λ|). The FULL spectrum spans many orders of magnitude and is indefinite (has negative eigenvalues); signed-log makes the whole range legible while keeping the sign. Off ⇒ linear."><input type="checkbox" id="qspec_slog" onchange="qspecSnapRenderNow(QSPEC_CURIDX)"> signed-log y</label>
+  <span id="qspec_mode" style="color:#0369a1;font-weight:600;font-size:12px"></span>
+  <label title="FALLBACK ONLY (non-MLP or p>20000): # of top ⊕ bottom eigenvalues to SAMPLE via Lanczos when the full p×p spectrum cannot be materialized. Ignored for MLPs — they always show the FULL spectrum (all p eigenvalues).">±eigs (fallback)&nbsp;<input id="qspeck" value="40" style="width:44px"></label>
   <span style="margin-left:6px;color:#0369a1;font-weight:600">◀ iteration&nbsp;</span>
   <input id="qspec_slider" type="range" min="0" max="0" value="0" step="1" style="flex:1;min-width:180px">
   <span id="qspec_step" style="color:#6b7280;font-size:12px;white-space:nowrap"></span>
 </div>
-<p class="cap"><b>Not a prediction</b> — a fine-grained look at the eigenstructure of the per-sample function Hessians over training. At EVERY iteration we compute the <b>top-$k$ ⊕ bottom-$k$ eigenvalues</b> ($k$ = the <i>±eigs per op</i> control) of the <b>residual-weighted</b> function Hessian $Q_r=\sum_k r_kQ_k$ (<b style="color:#2563eb">left</b>) and the <b>unweighted</b> $H=\sum_k Q_k$ (<b style="color:#0f766e">right</b>) ($Q_k=\nabla^2 f_k$; matrix-free via HVP), and plot them as a <b>scree</b> (x = rank, sorted descending; y = eigenvalue). Drag the <b>slider ▲</b> to scrub back to any earlier iteration and watch the spectrum evolve. Sits above Prediction-1&2; OFF by default (two Lanczos per step).</p>
+<p class="cap"><b>Not a prediction</b> — a fine-grained look at the eigenstructure of the per-sample function Hessians over training. For an <b>MLP</b> we compute the <b>FULL eigenspectrum</b> (all $p$ eigenvalues) of the <b>residual-weighted</b> function Hessian $Q_r=\sum_k r_kQ_k$ (<b style="color:#2563eb">left</b>) and the <b>unweighted</b> $H=\sum_k Q_k$ (<b style="color:#0f766e">right</b>) ($Q_k=\nabla^2 f_k$) by materializing each $p\times p$ operator exactly (autograd Hessian of $(f\!\cdot\!c)$) and taking <code>eigvalsh</code>; for larger nets ($p>20000$) or non-MLP archs it falls back to the top-$k$ ⊕ bottom-$k$ extremes (<i>±eigs (fallback)</i>). Plotted as a <b>scree</b> (x = rank, sorted descending; y = eigenvalue — flip <i>signed-log y</i> for the full range). It is <b>throttled</b> (≈60 snapshots over the run, not every step — the full $p\times p$ eig is heavy); drag the <b>slider ▲</b> to scrub to any snapshot. Sits above Prediction-1&2; OFF by default.</p>
 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px">
   <div id="p_qmr" class="plot" style="height:360px"></div>
   <div id="p_qh" class="plot" style="height:360px"></div>
+</div>
+</div>
+
+<div id="sec_s6f" style="border:2px solid #7c3aed;border-radius:8px;padding:6px 14px 12px;margin:6px 0 18px;background:#faf5ff;display:none">
+<h2 style="color:#7c3aed;margin-top:4px">§6 fixed-basis — how each init-direction is learned</h2>
+<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:2px 0 6px;font-size:13px;color:#374151">
+  <label title="What to plot on the y-axis for each fixed direction. CURVATURE = u_iᵀM_r(θ_t)u_i (M_r) and ‖J(θ_t)u_i‖² (GN) — how much that fixed direction has sharpened. ALIGNMENT = |cos(Jᵀr(θ_t), u_i)| — how much the current residual-gradient points along that fixed direction (§6 Phase-1).">y:&nbsp;
+    <select id="s6f_mode" onchange="s6fSnapRenderNow(S6F_CURIDX)"><option value="curv">curvature</option><option value="align">alignment |cos|</option></select></label>
+  <label title="signed-log₁₀ y-axis: sign(v)·log₁₀(1+|v|). Curvature spans many orders and M_r is indefinite; signed-log makes it legible. Ignored for alignment (already in [0,1])."><input type="checkbox" id="s6f_slog" checked onchange="s6fSnapRenderNow(S6F_CURIDX)"> signed-log y</label>
+  <label title="Overlay the INITIAL value (dashed grey) — the frozen ranking reference. For curvature this is exactly the init eigenvalue at each rank."><input type="checkbox" id="s6f_init" checked onchange="s6fSnapRenderNow(S6F_CURIDX)"> show init (dashed)</label>
+  <label title="# of top init-directions to freeze &amp; track per operator (applied on the NEXT run).">top-k&nbsp;<input id="s6fk" value="16" style="width:44px"></label>
+  <span style="margin-left:6px;color:#7c3aed;font-weight:600">◀ iteration&nbsp;</span>
+  <input id="s6f_slider" type="range" min="0" max="0" value="0" step="1" style="flex:1;min-width:180px">
+  <span id="s6f_step" style="color:#6b7280;font-size:12px;white-space:nowrap"></span>
+</div>
+<p class="cap"><b>Not a prediction.</b> The usual §6 / scree plots re-sort directions by their <i>current</i> eigenvalue every step, so "rank 3" is a different direction at every step and you cannot follow how one direction is learned. Here the ranking is <b>frozen at initialization</b>: at $t=0$ we take the top-$k$ eigenvectors $\{u_i\}$ of $M_r=\sum_k r_kQ_k$ (<b style="color:#7c3aed">left</b>) and of the Gauss-Newton $J^\top J$ (<b style="color:#c026d3">right</b>), ordered by their <b>init</b> eigenvalue, and keep that ordering for the whole run. Each snapshot then shows, for each <b>fixed</b> direction $u_i$: its <b>curvature</b> ($u_i^\top M_r(\theta_t)u_i$ / $\lVert J(\theta_t)u_i\rVert^2$) or its <b>alignment</b> $|\cos(J^\top r,u_i)|$. Solid = current step, dashed grey = the initial values (the frozen ranking). Watch which fixed directions <b>grow</b> (get amplified / learned) and which flatten. Throttled (≈80 snapshots); drag the slider to scrub. OFF by default.</p>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px">
+  <div id="p_s6mr" class="plot" style="height:360px"></div>
+  <div id="p_s6gn" class="plot" style="height:360px"></div>
 </div>
 </div>
 
@@ -414,15 +449,16 @@
   <label title="Prediction-2: sum d=(jrd−jdr) AND d²loss/dt² over the first N iterations (from 0), then plot the SIGN of each sum.">sum window N&nbsp;<input id="swsumn" value="10" style="width:46px"></label>
   <label title="Prediction-2b: sum d=(jrd−jdr) AND ∇‖J‖ (the change in ‖J‖) over the first N₂ iterations (from 0), then plot the SIGN of each sum (own window; larger = less noisy).">2b sum window N₂&nbsp;<input id="swsumn2" value="10" style="width:46px"></label>
   <label title="Prediction-2c/2d: number of M_r=Σ_k r_kQ_k eigenpairs (top-k ⊕ bottom-k, r=y−f) used in the curvature-sign-split alignment A± = Σ_{σ_i≷0} σ_i·(u_iᵀg)²/‖g‖² (g=Jᵀr, SQUARED projection ⇒ gauge-invariant; A₊−A₋ = the signed Rayleigh gᵀM_r g/‖g‖² over the ±k eigenspace) on the x-axis. Also sets the # eigenpairs shown. Default 10.">2c/2d M_r ±k&nbsp;<input id="swmrk" value="10" style="width:40px"></label>
-  <label title="Prediction-2c/2d: lookahead l for the y-axis — Δ‖J‖_F = ‖J_l‖ − ‖J₀‖ measured over l GD steps from each init (k0=0), at the config lr. Default 4.">2c/2d l&nbsp;<input id="swjl" value="4" style="width:36px"></label>
+  <label title="Prediction-2c/2d: lookahead l for the y-axis — Δ‖J‖_F = ‖J_l‖ − ‖J₀‖ measured over l GD steps from each init (k0=0), at the tiny 2c/2d/2e lr below. Default 4.">2c/2d l&nbsp;<input id="swjl" value="4" style="width:36px"></label>
+  <label title="Prediction-2c/2d/2e: σ-DEPENDENT lookahead lr for the l-step Δ‖J‖ (y-axis), where σ is the scaling factor. σ<1 uses the LEFT value (default 1e-3 — small inits are low-sharpness, so a larger lr is safe & numerically clean); σ≥1 uses the RIGHT value (default 1e-7 — tiny, so the high-sharpness large inits never catapult). MLP σ-loop runs in fp64 so the 1e-7 step is meaningful. Independent of the config lr.">2c/2d/2e lr&nbsp;σ&lt;1&nbsp;<input id="sw2lrlo" value="1e-3" style="width:52px">&nbsp;σ≥1&nbsp;<input id="sw2lr" value="1e-7" style="width:52px"></label>
   <label title="Prediction-5 (magnified PS view): number of frozen-Q,J / evolving-r steps to sum u₁ᵀ(QJr)v₁ over, with r_{t+1}=r_t−(η/N)JJᵀr_t. Default 4.">PS-5 steps&nbsp;<input id="swps5n" value="4" style="width:36px"></label>
-  <label title="Prediction-2c/2d DEDICATED σ (init-scale) sweep range — several inits of varying variance, log-spaced. Each point = one init scale σ. Default 0.1 → 10.">2c/2d σ&nbsp;<input id="swcsmin" value="0.1" style="width:44px">→<input id="swcsmax" value="10" style="width:44px"></label>
-  <label title="Show the Prediction-2c/2d plots (row 2): curvature-sign-split gradient alignment (x) vs the short-horizon change in ‖J‖ over l GD steps (y), swept over init scale σ. OFF by default — when off they are neither computed nor shown. Toggle ON to reveal; they populate on the next sweep run."><input type="checkbox" id="en_sw2cd" onchange="toggleSw2cd()"> show 2c/2d plots</label>
-  <label title="Show the Prediction-2e plot (row 2): the FULL-operator quadratic form gᵀM_r g = (Jᵀr)ᵀ M_r (Jᵀr) (x) vs the short-horizon change in ‖J‖ over l GD steps (y), same init-scale σ-sweep. OFF by default — independent of 2c/2d. Toggle ON to reveal; populates on the next sweep run."><input type="checkbox" id="en_sw2e" onchange="toggleSw2e()"> show 2e plot</label>
+  <label title="Prediction-2c/2d/2e DEDICATED σ sweep range — σ is a SCALING FACTOR on the standard-init std (σ=1 = standard parameterization; θ = σ·θ_standard, so σ multiplies the weight std, for muP/Kaiming/default alike), log-spaced. Each point = one scaling factor σ. Default 0.1 → 10.">2c/2d σ&nbsp;<input id="swcsmin" value="0.1" style="width:44px">→<input id="swcsmax" value="10" style="width:44px"></label>
+  <label title="Show the Prediction-2c/2d plots (row 2): curvature-sign-split gradient alignment (x) vs the short-horizon change in ‖J‖ over l GD steps (y), swept over the scaling factor σ (×standard init, 1=standard). OFF by default — when off they are neither computed nor shown. Toggle ON to reveal; they populate on the next sweep run."><input type="checkbox" id="en_sw2cd" onchange="toggleSw2cd()"> show 2c/2d plots</label>
+  <label title="Show the Prediction-2e plot (row 2): the FULL-operator quadratic form gᵀM_r g = (Jᵀr)ᵀ M_r (Jᵀr) (x) vs the short-horizon change in ‖J‖ over l GD steps (y), same scaling-factor σ-sweep. OFF by default — independent of 2c/2d. Toggle ON to reveal; populates on the next sweep run."><input type="checkbox" id="en_sw2e" onchange="toggleSw2e()"> show 2e plot</label>
   <label style="display:none" title="Blank (default): the sweep auto-runs on THIS server/GPU right after the main run finishes — no extra port needed. (Hidden 'for now'; a concurrent sweep on the same GPU would cancel the main run via the per-device token, so it defers.) Set a fleet GPU port here to instead run the sweep concurrently on that GPU.">sweep on port&nbsp;<input id="swport" value="" style="width:52px"></label>
   <span id="sweepstatus" style="color:#6b7280"></span>
 </div>
-<p class="cap">Each pair runs a full-batch GD training (config below, with that pair's lr &amp; init-std); <b>five plots in the first row — Prediction-1 quad/cubic, 2, 2b, and the ★ Magnified-PS view — plus the 2c/2d plots (off by default)</b>. <b>Prediction-1</b> — the iteration $t^{\star}$ at which $d=\lVert J\dot r\rVert-\lVert\dot J r\rVert$ (jrd−jdr) first changes sign, <b>actual (y)</b> vs. <b>predicted (x)</b> from the §10 self-trajectory at $\theta(T_{\rm start})$, model <b>refrozen every K</b> steps; on the dotted $y=x$ line = perfect, <b style="color:#ef4444">red</b> = censored. <b>Plot 1 (quadratic):</b> the prediction uses the <b>quadratic</b> approximation — $T=0$ and $Q$ fixed, so $\hat J\!+\!=\!\tfrac{\eta}{N}Q_0 g$. <b>Plot 2 (cubic):</b> the full cubic Eq-51 (adds the 3rd-derivative $T$ corrections). Comparing the two shows what the cubic term buys. <b>Prediction-2 (plot 3):</b> $\operatorname{sign\text{-}log}\,\Sigma d$ vs. $\operatorname{sign\text{-}log}\,\Sigma\,d^2\mathrm{loss}/dt^2$, both <b>summed over the first $N$ iterations</b> — a diagonal cloud ⇒ strong (rank) correlation between early $d$ and loss concavity/convexity. <b>Prediction-2b (plot 4):</b> $\Sigma d$ vs. $\Sigma\nabla\lVert J\rVert$ over the first $N_2$ iters. In plots 3–4 each tick is <b>split-coloured</b>: left half $\sum_{k\le3}\lvert\langle\hat r,v_k\rangle\rvert/\lVert r\rVert$ (residual↔top-3-NTK alignment), right half $\lVert J\rVert_F$ (both windowed means; <b>hover</b> shows the raw values). <b>EoS guard (plots 3–4 only):</b> a pair whose sharpness $\lambda_{\max}(\nabla^2 L)$ already $\ge 2/\eta$ at $t=0$ starts <i>on</i> the edge of stability, which would corrupt the early-window correlation — so its lr is <b>lowered</b> to $\eta'=0.9\cdot 2/\lambda_{\max}(\theta_0)$ (starts below EoS; the point's label shows <b>↓</b> and the original lr), and if that $\eta'$ would fall below the sweep's minimum lr the point is <b>dropped from plots 3–4</b> (it still appears in the $t^\star$ plots 1–2). <b>Prediction-2c/2d/2e</b> run on a <b>dedicated σ-sweep</b> — several inits of varying variance, σ log-spaced over <b>0.1 → 10</b> (the <i>2c/2d σ</i> control), decoupled from the (lr,σ) pairs above. Each point is one init scale σ and pairs a <b>curvature-sign-split gradient alignment</b> (x) against the <b>short-horizon change in the Jacobian norm</b> (y). Let $g=J^\top r$ be the residual-contracted gradient and $(\sigma_i,u_i)$ the top-$k$ ⊕ bottom-$k$ eigenpairs of $M_r=\sum_\alpha r_\alpha Q_\alpha$ ($r=y-f$; $k$ = the <i>2c/2d M_r ±k</i> control), all at $t=0$. Define $A_\pm=\sum_{\sigma_i\gtrless 0}\sigma_i\,(u_i^\top g)^2/\lVert g\rVert^2$ — how much $g$ aligns with the <b>positive-</b> vs <b>negative-curvature</b> directions of $M_r$ (the projection is <b>squared</b>, so the metric is <b>gauge-invariant</b> — the eigenvector sign $u_i\!\mapsto\!-u_i$ doesn't change $(u_i^\top g)^2$; and $A_+-A_-=\sum_i\sigma_i(u_i^\top g)^2/\lVert g\rVert^2$ is exactly the signed <b>Rayleigh quotient</b> $g^\top M_r g/\lVert g\rVert^2$ restricted to the $\pm k$ eigenspace, so its sign says whether $g$ sees net positive or negative curvature). The y-axis measures $\lVert J_l\rVert_F-\lVert J_0\rVert_F$ over <b>$l$ GD steps</b> ($l$ = the <i>2c/2d l</i> control, default 4; $k_0=0$; config lr). <b>Plot 5 (2c):</b> $x=A_+-A_-$, $y=\lVert J_l\rVert-\lVert J_0\rVert$. <b>Plot 6 (2d):</b> the normalized version, $x=\dfrac{A_+-A_-}{A_++A_-}\in[-1,1]$, $y=\dfrac{\lVert J_l\rVert-\lVert J_0\rVert}{\lVert J_0\rVert+\varepsilon}$. <b>Plot 7 (2e — separate toggle):</b> the <b>full-operator</b> quadratic form $x=g^\top M_r g=(J^\top r)^\top M_r (J^\top r)$ (computed with one HVP over the <i>entire</i> $M_r$, <b>not</b> restricted to the top-$k$⊕bottom-$k$ eigenspace and <b>un-normalized</b>), $y=\lVert J_l\rVert-\lVert J_0\rVert$ — the full-spectrum companion to 2c. A diagonal cloud ⇒ the init curvature-alignment predicts near-term sharpening/flattening of $\lVert J\rVert$. Points stream in as the σ-grid is swept.</p>
+<p class="cap">Each pair runs a full-batch GD training (config below, with that pair's lr &amp; init-std); <b>five plots in the first row — Prediction-1 quad/cubic, 2, 2b, and the ★ Magnified-PS view — plus the 2c/2d plots (off by default)</b>. <b>Prediction-1</b> — the iteration $t^{\star}$ at which $d=\lVert J\dot r\rVert-\lVert\dot J r\rVert$ (jrd−jdr) first changes sign, <b>actual (y)</b> vs. <b>predicted (x)</b> from the §10 self-trajectory at $\theta(T_{\rm start})$, model <b>refrozen every K</b> steps; on the dotted $y=x$ line = perfect, <b style="color:#ef4444">red</b> = censored. <b>Plot 1 (quadratic):</b> the prediction uses the <b>quadratic</b> approximation — $T=0$ and $Q$ fixed, so $\hat J\!+\!=\!\tfrac{\eta}{N}Q_0 g$. <b>Plot 2 (cubic):</b> the full cubic Eq-51 (adds the 3rd-derivative $T$ corrections). Comparing the two shows what the cubic term buys. <b>Prediction-2 (plot 3):</b> $\operatorname{sign\text{-}log}\,\Sigma d$ vs. $\operatorname{sign\text{-}log}\,\Sigma\,d^2\mathrm{loss}/dt^2$, both <b>summed over the first $N$ iterations</b> — a diagonal cloud ⇒ strong (rank) correlation between early $d$ and loss concavity/convexity. <b>Prediction-2b (plot 4):</b> $\Sigma d$ vs. $\Sigma\nabla\lVert J\rVert$ over the first $N_2$ iters. In plots 3–4 each tick is <b>split-coloured</b>: left half $\sum_{k\le3}\lvert\langle\hat r,v_k\rangle\rvert/\lVert r\rVert$ (residual↔top-3-NTK alignment), right half $\lVert J\rVert_F$ (both windowed means; <b>hover</b> shows the raw values). <b>EoS guard (plots 3–4 only):</b> a pair whose sharpness $\lambda_{\max}(\nabla^2 L)$ already $\ge 2/\eta$ at $t=0$ starts <i>on</i> the edge of stability, which would corrupt the early-window correlation — so its lr is <b>lowered</b> to $\eta'=0.9\cdot 2/\lambda_{\max}(\theta_0)$ (starts below EoS; the point's label shows <b>↓</b> and the original lr), and if that $\eta'$ would fall below the sweep's minimum lr the point is <b>dropped from plots 3–4</b> (it still appears in the $t^\star$ plots 1–2). <b>Prediction-2c/2d/2e</b> run on a <b>dedicated σ-sweep</b> where <b>σ is a scaling factor on the standard init</b> (σ=1 = the standard parameterization, θ = σ·θ<sub>standard</sub>, so σ multiplies the weight std — works for muP/Kaiming/default alike), σ log-spaced over <b>0.1 → 10</b> (the <i>2c/2d σ</i> control), decoupled from the (lr,σ) pairs above. Each point is one scaling factor σ and pairs a <b>curvature-sign-split gradient alignment</b> (x) against the <b>short-horizon change in the Jacobian norm</b> (y). Let $g=J^\top r$ be the residual-contracted gradient and $(\sigma_i,u_i)$ the top-$k$ ⊕ bottom-$k$ eigenpairs of $M_r=\sum_\alpha r_\alpha Q_\alpha$ ($r=y-f$; $k$ = the <i>2c/2d M_r ±k</i> control), all at $t=0$. Define $A_\pm=\sum_{\sigma_i\gtrless 0}\sigma_i\,(u_i^\top g)^2/\lVert g\rVert^2$ — how much $g$ aligns with the <b>positive-</b> vs <b>negative-curvature</b> directions of $M_r$ (the projection is <b>squared</b>, so the metric is <b>gauge-invariant</b> — the eigenvector sign $u_i\!\mapsto\!-u_i$ doesn't change $(u_i^\top g)^2$; and $A_+-A_-=\sum_i\sigma_i(u_i^\top g)^2/\lVert g\rVert^2$ is exactly the signed <b>Rayleigh quotient</b> $g^\top M_r g/\lVert g\rVert^2$ restricted to the $\pm k$ eigenspace, so its sign says whether $g$ sees net positive or negative curvature). The y-axis measures $\lVert J_l\rVert_F-\lVert J_0\rVert_F$ over <b>$l$ GD steps</b> ($l$ = the <i>2c/2d l</i> control, default 4; $k_0=0$; a σ-dependent tiny <i>2c/2d/2e lr</i> (scaling-factor σ<1: 1e-3, σ≥1: 1e-7; MLP σ-loop in fp64), so the step stays linear and never catapults). <b>Plot 5 (2c):</b> $x=A_+-A_-$, $y=\lVert J_l\rVert-\lVert J_0\rVert$. <b>Plot 6 (2d):</b> the normalized version, $x=\dfrac{A_+-A_-}{A_++A_-}\in[-1,1]$, $y=\dfrac{\lVert J_l\rVert-\lVert J_0\rVert}{\lVert J_0\rVert+\varepsilon}$. <b>Plot 7 (2e — separate toggle):</b> the <b>full-operator</b> quadratic form $x=g^\top M_r g=(J^\top r)^\top M_r (J^\top r)$ (computed with one HVP over the <i>entire</i> $M_r$, <b>not</b> restricted to the top-$k$⊕bottom-$k$ eigenspace and <b>un-normalized</b>), $y=\lVert J_l\rVert-\lVert J_0\rVert$ — the full-spectrum companion to 2c. A diagonal cloud ⇒ the init curvature-alignment predicts near-term sharpening/flattening of $\lVert J\rVert$. Points stream in as the σ-grid is swept.</p>
 <div class="plotrow row5"><div id="p_sw0" class="plot" style="height:320px"></div><div id="p_sw1" class="plot" style="height:320px"></div><div id="p_sw2" class="plot" style="height:320px"></div><div id="p_sw3" class="plot" style="height:320px"></div><div id="p_sw6" class="plot" style="height:320px"></div></div>
 <p class="cap" style="margin:2px 0 6px"><b>Plot 5 — ★ Magnified view on PS</b>: same split-tick scatter as Prediction-2b, one point per pair that <b>enters</b> the <b>progressive-sharpening regime</b> ($\lVert J\dot r\rVert&gt;\lVert\dot J r\rVert$, i.e. jrd&gt;jdr) while starting <b>below EoS</b> (init sharpness $&lt;2/\eta$). Each pair is frozen at its <b>PS-onset step $t_\star$</b> — $t=0$ if it already starts in PS, else the first neg→pos crossing of jrd−jdr (the <i>same event the live Prediction-3 anchors on</i>); the point label shows <b>PS@t</b>. <b>y</b> = $\Sigma\nabla\lVert J\rVert$ (as plot 4); <b>x</b> = $\Sigma_{t=0}^{k-1} u_1^\top(QJr_t)v_1$ over $k$ (default 4) steps, with $Q,J$ frozen at $\theta_\star$ and $r$ evolving $r_{t+1}=r_t-\tfrac{\eta}{N}JJ^\top r_t$ ($u_1$=top NTK eigvec of $JJ^\top$ at $t_\star$, $v_1=\mathrm{normalize}(J^\top u_1)$, so $u_1^\top(QJr)v_1=\sum_k (u_1)_k\,v_1^\top Q_k(J^\top r_t)$ — the frozen-$Q,J$ rate of $J$'s top singular value, the PS driver). Freezing at the onset makes it mildly lr-dependent (the onset step depends on $\eta$).</p>
 <div id="sw_row2" class="plotrow row2" style="margin-top:14px;display:none"><div id="p_sw4" class="plot" style="height:340px"></div><div id="p_sw5" class="plot" style="height:340px"></div><div id="p_sw7" class="plot" style="height:340px;display:none"></div></div>
@@ -1217,9 +1253,59 @@ function computeFHfrozen(th,spec,X,N,inDim,p,eps,nProbe,n7,nM,mV,M){
   return {gamma,yv,zz,tt};
 }
 
-function slqDensity(hvpFn,p,nProbe,m,nGrid,seed){
+// modified Gram-Schmidt (two-pass, for stability) QR of b column-vectors → {Q:[b orthonormal vecs], R:(b×b upper)}
+// mirrors torch.linalg.qr used by server._block_lanczos_core (statistically equivalent; not byte-identical RNG).
+function _mgsBlock(cols,p,b){
+  const Q=[],R=new Float64Array(b*b);
+  for(let j=0;j<b;j++){
+    const v=Float64Array.from(cols[j]);
+    for(let pass=0;pass<2;pass++)for(let i=0;i<j;i++){const r=dot(Q[i],v);R[i*b+j]+=r;for(let q=0;q<p;q++)v[q]-=r*Q[i][q];}
+    let nrm=0;for(let q=0;q<p;q++)nrm+=v[q]*v[q];nrm=Math.sqrt(nrm);R[j*b+j]=nrm;
+    const qj=new Float64Array(p);if(nrm>1e-300)for(let q=0;q<p;q++)qj[q]=v[q]/nrm;
+    Q.push(qj);
+  }
+  return {Q,R};
+}
+// BLOCK Lanczos (block size b) — JS port of server._block_lanczos_core. Three-term block recurrence with full
+// reorthogonalization; returns the symmetric block-tridiagonal T (kb×kb) whose eigenpairs are the block-SLQ nodes.
+function blockLanczosCore(hvpFn,p,b,m,seed){
+  b=Math.max(1,Math.min(b,p));
+  const start=[];for(let c=0;c<b;c++)start.push(randVec(p,(seed+c*2654435761)>>>0));
+  let {Q:Qj}=_mgsBlock(start,p,b);
+  const Qblocks=[],A=[],B=[];let Qprev=null,Bprev=null;
+  const kmax=Math.min(Math.max(1,Math.floor(p/b)),m);
+  for(let it=0;it<kmax;it++){
+    Qblocks.push(Qj);
+    const W=[];for(let c=0;c<b;c++)W.push(hvpFn(Qj[c]));                    // A·Q_j (b single-vector HVPs)
+    const As=new Float64Array(b*b);
+    for(let i=0;i<b;i++)for(let j=0;j<b;j++){const aij=dot(Qj[i],W[j]),aji=dot(Qj[j],W[i]);As[i*b+j]=0.5*(aij+aji);}  // symmetric diagonal block A_j
+    A.push(As);
+    for(let j=0;j<b;j++){const wj=W[j];for(let i=0;i<b;i++){const a=As[i*b+j],qi=Qj[i];for(let q=0;q<p;q++)wj[q]-=a*qi[q];}}          // W -= Q_j A_j
+    if(Qprev)for(let j=0;j<b;j++){const wj=W[j];for(let i=0;i<b;i++){const bb=Bprev[j*b+i],qi=Qprev[i];for(let q=0;q<p;q++)wj[q]-=bb*qi[q];}}   // W -= Q_{j-1} B_{j-1}ᵀ
+    for(let pass=0;pass<2;pass++)for(const Qc of Qblocks)for(let j=0;j<b;j++){const wj=W[j];for(let i=0;i<b;i++){const c=dot(Qc[i],wj);for(let q=0;q<p;q++)wj[q]-=c*Qc[i][q];}}  // full reorth (twice)
+    const {Q:Qnext,R:Bj}=_mgsBlock(W,p,b);B.push(Bj);
+    let mx=0;for(let i=0;i<b*b;i++)mx=Math.max(mx,Math.abs(Bj[i]));
+    if(mx<1e-10)break;
+    Qprev=Qj;Bprev=Bj;Qj=Qnext;
+  }
+  const k=A.length,kb=k*b;const T=new Float64Array(kb*kb);
+  for(let i=0;i<k;i++){
+    for(let r=0;r<b;r++)for(let c=0;c<b;c++)T[(i*b+r)*kb+(i*b+c)]=A[i][r*b+c];
+    if(i<k-1)for(let r=0;r<b;r++)for(let c=0;c<b;c++){T[((i+1)*b+r)*kb+(i*b+c)]=B[i][r*b+c];T[(i*b+c)*kb+((i+1)*b+r)]=B[i][r*b+c];}
+  }
+  return {T,kb,b};
+}
+function slqDensity(hvpFn,p,nProbe,m,nGrid,seed,block){
+  block=Math.max(1,(block|0)||1);
   const TH=[],W=[];
-  for(let pr=0;pr<nProbe;pr++){
+  if(block>1){
+    const mBlk=Math.min(Math.max(1,Math.floor(p/block)),m);
+    for(let pr=0;pr<nProbe;pr++){
+      const {T,kb,b}=blockLanczosCore(hvpFn,p,block,mBlk,(seed+pr*1315423)>>>0);
+      const {vals,V}=jacobiEig(T,kb);
+      for(let i=0;i<kb;i++){let w=0;for(let j=0;j<b;j++){const vj=V[j*kb+i];w+=vj*vj;}TH.push(vals[i]);W.push(w/(b*nProbe));}   // ‖first b-block of eigvec i‖²
+    }
+  }else for(let pr=0;pr<nProbe;pr++){
     const {Q,k,T}=lanczosCore(hvpFn,p,Math.min(p,m),randVec(p,(seed+pr*1315423)>>>0));
     const {vals,V}=jacobiEig(T,k);
     for(let i=0;i<k;i++){TH.push(vals[i]);const w0=V[0*k+i];W.push(w0*w0/nProbe);}
@@ -3480,9 +3566,15 @@ function _buildQspecPlots(){
   mk('p_qmr','Q_r = Σ_k r_kQ_k  (residual-weighted)','#2563eb'); mk('p_qh','H = Σ_k Q_k  (unweighted)','#0f766e');
 }
 function qspecSnapRenderNow(i){const s=QSPEC_SNAPS[i];if(!s)return;QSPEC_CURIDX=i;
-  try{Plotly.restyle('p_qmr',{x:[s.mr.map((_,q)=>q)],y:[s.mr]},[0]);}catch(e){}
-  try{Plotly.restyle('p_qh',{x:[s.h.map((_,q)=>q)],y:[s.h]},[0]);}catch(e){}
+  const cb=document.getElementById('qspec_slog'),useSlog=cb&&cb.checked;
+  const tf=useSlog?(v=>Math.sign(v)*Math.log10(1+Math.abs(v))):(v=>v);   // signed-log: keeps sign, compresses many orders of magnitude
+  const longspec=(s.mr.length>150),mode=longspec?'lines':'lines+markers';   // full spectrum (p pts) ⇒ clean line; truncated ⇒ line+markers
+  try{Plotly.restyle('p_qmr',{x:[s.mr.map((_,q)=>q)],y:[s.mr.map(tf)],mode:[mode]},[0]);}catch(e){}
+  try{Plotly.restyle('p_qh',{x:[s.h.map((_,q)=>q)],y:[s.h.map(tf)],mode:[mode]},[0]);}catch(e){}
+  const yt=useSlog?'signed-log₁₀(eigenvalue)':'eigenvalue';
+  try{Plotly.relayout('p_qmr',{'yaxis.title':yt});Plotly.relayout('p_qh',{'yaxis.title':yt});}catch(e){}
   const sp=document.getElementById('qspec_step');if(sp)sp.textContent='step '+s.t+'  ·  snapshot '+(i+1)+'/'+QSPEC_SNAPS.length;
+  const md=document.getElementById('qspec_mode');if(md)md.textContent=s.full?('full spectrum · p='+(s.p||s.mr.length)):('top⊕bottom-'+Math.round(s.mr.length/2)+(s.p?' of p='+s.p:''));
   const sl=document.getElementById('qspec_slider');if(sl&&+sl.value!==i)sl.value=i;}
 function qspecSnapRenderIdx(i){QSPEC_PENDING=i;if(QSPEC_RAF)return;QSPEC_RAF=requestAnimationFrame(()=>{QSPEC_RAF=0;const j=QSPEC_PENDING;QSPEC_PENDING=-1;if(j>=0)qspecSnapRenderNow(j);});}
 function qspecSnapPush(rec){if(!rec||!rec.mr)return;const sl=document.getElementById('qspec_slider'),wasLive=!sl||(+sl.value>=+sl.max);
@@ -3500,6 +3592,46 @@ function _ensureQspec(){const cb=document.getElementById('enQspec');if(cb&&!cb.c
   const el=document.getElementById('sec_qspec');const wasHidden=el&&el.style.display==='none';if(wasHidden)el.style.display='';
   const g=document.getElementById('p_qmr');if(!g||!g._fullLayout)_buildQspecPlots();
   if(wasHidden)requestAnimationFrame(()=>{for(const id of ['p_qmr','p_qh']){const gd=document.getElementById(id);if(gd&&gd._fullLayout){try{Plotly.Plots.resize(gd);}catch(e){}}}});}
+// ── §6 FIXED-BASIS (s6f): §6 phases along the FROZEN init eigenbasis of M_r & GN + a scrubber (mirrors qspec)
+let S6F_SNAPS=[], S6F_RAF=0, S6F_PENDING=-1, S6F_CURIDX=0; const S6F_MAXSNAPS=4000;
+function _buildS6fPlots(){
+  const mk=(id,ttl,color)=>{const L=baseLayout(ttl,'value',false);L.xaxis.title='rank i (frozen at init)';L.yaxis.zeroline=true;L.yaxis.zerolinecolor='#cbd5e1';L.showlegend=true;L.legend={orientation:'h',y:1.12,x:0,font:{size:10}};
+    newP(id,[{x:[],y:[],name:'current step',mode:'lines+markers',marker:{size:5,color:color},line:{color:color,width:1.8}},
+             {x:[],y:[],name:'initial (frozen)',mode:'lines',line:{color:'#9ca3af',width:1.2,dash:'dot'}}],L);};
+  mk('p_s6mr','M_r = Σ_k r_kQ_k  (residual-weighted function Hessian)','#7c3aed');
+  mk('p_s6gn','Gauss-Newton  JᵀJ','#c026d3');
+}
+function s6fSnapRenderNow(i){const s=S6F_SNAPS[i],s0=S6F_SNAPS[0];if(!s||!s0)return;S6F_CURIDX=i;
+  const mode=(document.getElementById('s6f_mode')||{}).value||'curv';
+  const slog=(document.getElementById('s6f_slog')||{}).checked, showInit=(document.getElementById('s6f_init')||{}).checked;
+  const isCurv=(mode==='curv');
+  const tf=(isCurv&&slog)?(v=>Math.sign(v)*Math.log10(1+Math.abs(v))):(v=>v);
+  const draw=(id,curKey)=>{const cur=s[curKey]||[],ini=s0[curKey]||[];
+    const x=cur.map((_,q)=>q+1);
+    try{Plotly.restyle(id,{x:[x],y:[cur.map(tf)]},[0]);}catch(e){}
+    try{Plotly.restyle(id,{x:[showInit?x:[]],y:[showInit?ini.map(tf):[]]},[1]);}catch(e){}
+    const yt=isCurv?(slog?'signed-log₁₀(curvature)':'curvature'):'|cos(Jᵀr, u_i)|';
+    try{Plotly.relayout(id,{'yaxis.title':yt,'yaxis.range':isCurv?null:[0,1.02]});}catch(e){}};
+  draw('p_s6mr', isCurv?'mr_curv':'mr_align');
+  draw('p_s6gn', isCurv?'gn_curv':'gn_align');
+  const sp=document.getElementById('s6f_step');if(sp)sp.textContent='step '+s.t+'  ·  snapshot '+(i+1)+'/'+S6F_SNAPS.length+'  ·  k='+s.k;
+  const sl=document.getElementById('s6f_slider');if(sl&&+sl.value!==i)sl.value=i;}
+function s6fSnapRenderIdx(i){S6F_PENDING=i;if(S6F_RAF)return;S6F_RAF=requestAnimationFrame(()=>{S6F_RAF=0;const j=S6F_PENDING;S6F_PENDING=-1;if(j>=0)s6fSnapRenderNow(j);});}
+function s6fSnapPush(rec){if(!rec||!rec.gn_curv)return;const sl=document.getElementById('s6f_slider'),wasLive=!sl||(+sl.value>=+sl.max);
+  S6F_SNAPS.push(rec);
+  if(S6F_SNAPS.length>S6F_MAXSNAPS){S6F_SNAPS=S6F_SNAPS.filter((_,ix)=>ix%2===0||ix===0);if(S6F_CURIDX>=S6F_SNAPS.length)S6F_CURIDX=S6F_SNAPS.length-1;}
+  if(sl){sl.max=S6F_SNAPS.length-1;if(wasLive)sl.value=sl.max;}
+  s6fSnapRenderIdx(wasLive?S6F_SNAPS.length-1:(sl?+sl.value:S6F_SNAPS.length-1));}
+function s6fSnapReset(){S6F_SNAPS=[];S6F_CURIDX=0;if(S6F_RAF){cancelAnimationFrame(S6F_RAF);S6F_RAF=0;}S6F_PENDING=-1;
+  for(const id of ['p_s6mr','p_s6gn']){try{Plotly.restyle(id,{x:[[],[]],y:[[],[]]},[0,1]);}catch(e){}}
+  const sl=document.getElementById('s6f_slider');if(sl){sl.max=0;sl.value=0;}}
+function toggleS6f(){const cb=document.getElementById('enS6f'),el=document.getElementById('sec_s6f');if(!cb||!el)return;
+  el.style.display=cb.checked?'block':'none';
+  if(cb.checked){_buildS6fPlots();requestAnimationFrame(()=>{for(const id of ['p_s6mr','p_s6gn']){const g=document.getElementById(id);if(g&&g._fullLayout){try{Plotly.Plots.resize(g);}catch(e){}}}});}}
+function _ensureS6f(){const cb=document.getElementById('enS6f');if(cb&&!cb.checked)cb.checked=true;
+  const el=document.getElementById('sec_s6f');const wasHidden=el&&getComputedStyle(el).display==='none';if(wasHidden)el.style.display='block';
+  const g=document.getElementById('p_s6mr');if(!g||!g._fullLayout)_buildS6fPlots();
+  if(wasHidden)requestAnimationFrame(()=>{for(const id of ['p_s6mr','p_s6gn']){const gd=document.getElementById(id);if(gd&&gd._fullLayout){try{Plotly.Plots.resize(gd);}catch(e){}}}});}
 function _buildSSPlots(k){   // Self-stabilization: 4 line plots — p_ss1/p_ss2 have k curves (cos ∇S with top/bottom-k H_P eigvecs), p_ss3/p_ss4 one curve each
   k=k||Math.max(1,Math.min(10,parseInt((document.getElementById('ssk')||{}).value||'5')||5));
   const col=(i,n,warm)=>{const u=n>1?i/(n-1):0;return warm?`rgb(${Math.round(219-30*u)},${Math.round(39+70*u)},${Math.round(119-50*u)})`:`rgb(${Math.round(37+40*u)},${Math.round(99+90*u)},${Math.round(235-90*u)})`;};
@@ -3532,6 +3664,7 @@ function initLivePlots(n,kth,nResid,thr,n7,n8,multi){
   trReset();    // §5: clear the trace-over-iterations curves
   slqSnapReset();   // §4: clear the SLQ-scree scrubber history
   qspecSnapReset();   // Q-eigenspectrum: clear the scrubber history
+  s6fSnapReset();   // §6 fixed-basis: clear the scrubber history
   syncSectionVis(multi);   // gate sections by the panel toggles (multi from the actual run)
   const dis=s=>OPT.gs?s:s+'  (off)';
   // §1
@@ -3762,6 +3895,7 @@ function initLivePlots(n,kth,nResid,thr,n7,n8,multi){
   }
   if(chk('enSS'))_buildSSPlots();   // Self-stabilization (ss): 4 streaming line plots, (re)built on run start when enabled
   if(chk('enQspec')){_buildQspecPlots();qspecSnapReset();}   // Q eigenspectrum (qspec)
+  if(chk('enS6f')){_buildS6fPlots();s6fSnapReset();}   // §6 fixed-basis
   newP('p_p3_diff',[{x:[],y:[],mode:'lines',name:'‖J·ṙ‖ (jrd)',line:{color:'#2563eb',width:1.7}},{x:[],y:[],mode:'lines',name:'‖J̇·r‖ (jdr)',line:{color:'#16a34a',width:1.7}},{x:[],y:[],mode:'lines',name:'diff = jrd−jdr',line:{color:'#dc2626',width:2}}],baseLayout('jrd, jdr & diff → t*','value',false));
   window._P3_CLEARED=false;   // reset the pred-3 "waiting for t*" placeholder each run
   const _p3note=[{text:'activates at the ‖J·ṙ‖−‖J̇·r‖<br>sign-change t* (none yet in this run)',xref:'paper',yref:'paper',x:0.5,y:0.5,showarrow:false,align:'center',font:{size:11,color:'#94a3b8'}}];
@@ -4174,7 +4308,8 @@ function pushPoint(t,D,n,kth,nResid){
         extP('p_eds3',{x:[[t],[t]],y:[[aH['5']],[aH['10']]]},[0,1]);
         extP('p_eds4',{x:[[t],[t]],y:[[aM['1']],[aM['2']]]},[0,1]);
         extP('p_eds5',{x:[[t],[t]],y:[[aM['5']],[aM['10']]]},[0,1]);}catch(e){}}
-  if(D.g_qspec){const g=D.g_qspec; _ensureQspec(); qspecSnapPush({t:t, mr:g.mr, h:g.h});}   // Q eigenspectrum: per-iteration scree → scrubber history
+  if(D.g_s6fix){_ensureS6f(); s6fSnapPush(D.g_s6fix);}   // §6 fixed-basis
+  if(D.g_qspec){const g=D.g_qspec; _ensureQspec(); qspecSnapPush({t:t, mr:g.mr, h:g.h, full:g.full, p:g.p});}   // Q eigenspectrum: per-iteration scree → scrubber history
   if(D.g_ss){const g=D.g_ss;   // Self-stabilization: cos(∇S, ±k H_P eigvecs) [k curves each] + the 2 projected-gradient cosines (null y ⇒ gap, e.g. relu ⇒ ∇S≈0)
     _ensureSS((g.top||[]).length);   // build+REVEAL on every g_ss (idempotent) — a loaded capture restores enSS.checked but never fires onchange, so the section must be revealed here
     try{const kt=(g.top||[]).length, kb=(g.bot||[]).length;
@@ -4356,7 +4491,7 @@ async function runLocal(preview){                       // BROWSER mode: fresh s
   const g3dStride=Math.max(1,+val('cubeevery')||1);   // §11-§14 cube cadence: emit every k-th tick (mirror server cubeevery/g3dstride); §15/§1-9/§16-17 stay per-tick
   const s28k=Math.max(1,Math.floor(+val('s28k')||40));   // §20: # eigenpairs per side (top-K ⊕ bottom-K) of M_r
   const s29k=Math.max(1,Math.floor(+val('s29k')||40));   // §21: NTK top-K & M_r top-K⊕bottom-K
-  ST={opt,optim:val('optimizer'),spec,p,X,Y,N,inDim,outDim,M,nResid,th,lr,eps,thr,n,kth,nSub,mF,mV,mSLQ,nProbe,efrac,eigEvery,slqStride,heavyEvery,grid3dcap,divreg:Math.max(0,+val('divreg')||0.3),sec12ncap:Math.max(1,+val('sec12ncap')||500),g3dStride,s28k,s29k,steps,posIdx,negIdx,
+  ST={opt,optim:val('optimizer'),spec,p,X,Y,N,inDim,outDim,M,nResid,th,lr,eps,thr,n,kth,nSub,mF,mV,mSLQ,nProbe,slqBlock:Math.max(1,+val('slqblock')||4),efrac,eigEvery,slqStride,heavyEvery,grid3dcap,divreg:Math.max(0,+val('divreg')||0.3),sec12ncap:Math.max(1,+val('sec12ncap')||500),g3dStride,s28k,s29k,steps,posIdx,negIdx,
       needVecs,needVals,prevTop:Array(nSub).fill(null),prevBot:Array(nSub).fill(null),prevPos:null,prevNeg:null,
       pNtk:Array(n).fill(null),pVH:Array(n).fill(null),pUJ:Array(n).fill(null),pM1:[null,null,null,null],pM2:[null,null,null,null],pG2:Array(n).fill(null),
       prevSharp7a:null,prevNtkR7a:null,prevPrevNtkR7a:null,sumGsync:null,sumGlag:null,cntGs:0,cntGl:0,   // §7a Δλ·Δr running products
@@ -4894,10 +5029,11 @@ async function loop(){                                   // drives ST forward; r
           paPos,paNeg,ntkR,ntkH,ntkGs,ntkGsA,ntkGl,ntkGlA,fhEvT,fhEvB,jhe1,jhe2,jhe1b,jhe2b,jh2e1,jh2e2,jh2e1b,jh2e2b,g2J,g2Jn,
           q9t,q9b,q9tN,q9bN,q9tR,q9bR,q9gt,q9gb,q10,q10N},S.n,S.kth,S.nResid);
         if(O.s5&&S.eigTick%S.slqStride===0){
-          {const dH=slqDensity(v=>hvpF(S.th,spec,X,N,inDim,p,v,eps),p,S.nProbe,S.mSLQ,80,0x11);refreshSLQ('p_sH',dH,p);   // §5 stays live-latest
-           const dG=slqDensity(v=>hvpG(S.th,spec,X,N,inDim,p,v,eps),p,S.nProbe,S.mSLQ,80,0x22);refreshSLQ('p_sG',dG,p);
-           const dS=slqDensity(v=>hvpS(S.th,spec,X,N,inDim,p,v,eps,cS),p,S.nProbe,S.mSLQ,80,0x33);refreshSLQ('p_sS',dS,p);
-           const dHL=slqDensity(v=>hvpL(S.th,spec,X,Y,N,inDim,p,v,eps),p,S.nProbe,S.mSLQ,80,0x44);refreshSLQ('p_sHL',dHL,p);
+          {const bk=S.slqBlock||1;
+           const dH=slqDensity(v=>hvpF(S.th,spec,X,N,inDim,p,v,eps),p,S.nProbe,S.mSLQ,80,0x11,bk);refreshSLQ('p_sH',dH,p);   // §5 stays live-latest
+           const dG=slqDensity(v=>hvpG(S.th,spec,X,N,inDim,p,v,eps),p,S.nProbe,S.mSLQ,80,0x22,bk);refreshSLQ('p_sG',dG,p);
+           const dS=slqDensity(v=>hvpS(S.th,spec,X,N,inDim,p,v,eps,cS),p,S.nProbe,S.mSLQ,80,0x33,bk);refreshSLQ('p_sS',dS,p);
+           const dHL=slqDensity(v=>hvpL(S.th,spec,X,Y,N,inDim,p,v,eps),p,S.nProbe,S.mSLQ,80,0x44,bk);refreshSLQ('p_sHL',dHL,p);
            slqSnapPush({t:t,sH:dH,sG:dG,sS:dS,sHL:dHL,p:p});}   // §4 scree → per-tick history (scrubber)
           const ntr=Math.max(S.nProbe,4);   // §5 trace-over-iterations (Hutchinson)
           trPush({t:S.t,trH:hutchTrace(v=>hvpF(S.th,spec,X,N,inDim,p,v,eps),p,ntr,0x51)/N,
@@ -4934,6 +5070,7 @@ function resetSim(){
   s15Reset();s15nReset();s15bReset();s15p34Reset();s15corrReset();s19Reset();s20Reset();s21Reset();p6Reset();S22CH.reset();S23CH.reset();s16Reset();s17Reset();   // §15+§16+§19+§20: clear the time-series too
   slqSnapReset();   // §4: clear the SLQ-scree scrubber history
   qspecSnapReset();   // Q-eigenspectrum: clear the scrubber history
+  s6fSnapReset();   // §6 fixed-basis: clear the scrubber history
   updateButtons();
 }
 
@@ -4951,7 +5088,7 @@ function _zip(files){const enc=new TextEncoder(),parts=[],cd=[];let off=0;
   const eo=new Uint8Array([].concat(u32(0x06054b50),u16(0),u16(0),u16(cd.length),u16(cd.length),u32(cs),u32(off),u16(0)));
   return new Blob([...parts,...cp,eo],{type:'application/zip'});}
 function _b64bytes(durl){const s=atob(durl.split(',')[1]),a=new Uint8Array(s.length);for(let i=0;i<s.length;i++)a[i]=s.charCodeAt(i);return a;}
-function _cfgText(){const ids=['preset','compute','dataset','arch','loss','chmul','dmodel','nhead','nlayer','seqlen','degree','cvar','ksparse','angle','norm1','norm2','lab1','lab2','depth','width','act','bias','fixedx','inputstd','ssign','optimizer','indim','outdim','nsamp','batch','tgt','lr','init','initscheme','steps','seed','neig','kth','eigevery','slqevery','heavyevery','slqprobes','energyp','gson','qapprox','qmode','tset','cubicapprox','grid3dcap','divreg'];
+function _cfgText(){const ids=['preset','compute','dataset','arch','loss','chmul','dmodel','nhead','nlayer','seqlen','degree','cvar','ksparse','angle','norm1','norm2','lab1','lab2','depth','width','act','bias','fixedx','inputstd','ssign','optimizer','indim','outdim','nsamp','batch','tgt','lr','init','initscheme','steps','seed','neig','kth','eigevery','slqevery','heavyevery','slqprobes','slqblock','energyp','gson','qapprox','qmode','tset','qinit','qfixt','qseed','cubicapprox','grid3dcap','divreg'];
   const L=ids.map(id=>{const e=document.getElementById(id);return e?(id+' = '+e.value):null;}).filter(Boolean);
   L.push('panels: '+['en1','en2','en3','en4','en5','en6','en7','en8','en9','en10','en11','en12','en13','en14','en15','en16','en17','en18','en19','en20','en21','en22','en23'].map(id=>id+'='+(chk(id)?1:0)).join(' '));
   const stt=document.getElementById('status');if(stt&&stt.textContent)L.push('status: '+stt.textContent);
@@ -5105,7 +5242,7 @@ async function downloadPlots(){
 // shared by backendURL (live stream) and the capture save/load (Compute → "Load saved run").
 // QUERY_IDS: plain value controls; SEC_TOGGLE_MAP: query-key ↔ checkbox-id for every section toggle.
 const QUERY_IDS=['depth','width','act','bias','fixedx','inputstd','ssign','optimizer','lr','init','initscheme','nsamp','batch','indim','outdim','tgt',
-   'neig','kth','steps','eigevery','slqevery','heavyevery','slqprobes','energyp','seed','gson','qapprox','evcubic','qmode','tset','cubicapprox','grid3dcap','sec12ncap','cubeevery','s24warm','s24iter','s24grid','s24ares','s24k','s28k','s29k','s30t','s31r','s31scale',
+   'neig','kth','steps','eigevery','slqevery','heavyevery','slqprobes','slqblock','energyp','seed','gson','qapprox','evcubic','qmode','tset','qinit','qfixt','qseed','cubicapprox','grid3dcap','sec12ncap','cubeevery','s24warm','s24iter','s24grid','s24ares','s24k','s28k','s29k','s30t','s31r','s31scale',
    'dataset','arch','loss','chmul','nlayer','nhead','dmodel','seqlen','degree','cvar','divreg','ksparse','angle','norm1','norm2','lab1','lab2','saddlesep','agfratio',
    'lr_gd','lr_sign','lr_muon','lr_gn'];   // prediction-6 per-optimizer learning rates (restore on capture load so a load→re-save round-trip is lossless)
 const SEC_TOGGLE_MAP=[['s1','en1'],['s2','en2'],['s3','en3'],['s4','en4'],['s5','en5'],['s6','en6'],
@@ -5154,7 +5291,12 @@ function currentQueryParams(){   // the exact query-style param dict the backend
   const o={};
   for(const id of QUERY_IDS){const el=document.getElementById(id);if(el)o[id]=val(id);}
   for(const [k,id] of SEC_TOGGLE_MAP)o[k]=chk(id)?'1':'0';
-  for(const k of ['s1','s2','s3','s12','s14','s16','s17','s29','s36','s37','s38'])o[k]='1';   // prediction demo: always compute §1/2/3 + §9/§9c/§9d-c/§10 + §21 + prediction-3/4/5 to feed the panels
+  for(const k of ['s1','s2','s3'])o[k]='1';   // §1 dashboard (loss/sharpness/residual/spectral edges) — always shown ⇒ always computed
+  o['s36']=chk('enP3')?'1':'0';   // Prediction-3: compute ONLY when its ★ tick is on (was force-computed even when the panel was hidden ⇒ wasted compute)
+  o['s37']=chk('enP4')?'1':'0';   // Prediction-4: compute ONLY when ticked
+  o['s38']=chk('enPt')?'1':'0';   // Prediction-5.1 (trace): compute ONLY when ticked
+  {const _p52=chk('enPd')?'1':'0'; o['s12']=o['s14']=o['s16']=o['s17']=_p52;}   // Prediction-5.2 (sharpness) reuses §9/§9c/§9d-c/§10 (s17 = the heaviest, cubic) — compute ONLY when its ★ tick is on
+  // §6 (s29) now follows its own tick en29 (set by SEC_TOGGLE_MAP above); no longer force-computed when unticked.
   o['s39']=chk('enP6')?'1':'0';   // prediction-6 (adaptive-optimizer GN-eigenvalue histograms) — off by default, on only when its toggle is checked
   for(const k of ['lr_gd','lr_sign','lr_muon','lr_gn']){const el=document.getElementById(k);if(el&&el.value!=='')o[k]=el.value;}   // prediction-6 per-optimizer learning rates
   o['s5']=chk('enSlq')?'1':'0';   // §4 SLQ densities: compute only when the SLQ toggle is on (feeds sec_slqH)
@@ -5177,6 +5319,7 @@ function currentQueryParams(){   // the exact query-style param dict the backend
   o['ss']=chk('enSS')?'1':'0';   // Self-stabilization (not a prediction): computed ONLY when enabled (Lanczos + 2 HVPs per eig-tick)
   {const e=document.getElementById('ssk');if(e)o['ssk']=e.value||'5';}   // self-stabilization: # top/bottom eigenvectors of the preconditioned Hessian H_P
   o['qspec']=chk('enQspec')?'1':'0';
+  o['s6f']=chk('enS6f')?'1':'0'; o['s6fk']=(document.getElementById('s6fk')||{}).value||'16';   // §6 fixed-basis
   {const e=document.getElementById('qspeck');if(e)o['qspeck']=e.value||'40';}   // Q eigenspectrum
 
   {const e=document.getElementById('prthr');if(e)o['prthr']=e.value||'0.9';}   // ray anchor cos threshold
@@ -5201,7 +5344,7 @@ window.addEventListener('load',()=>{try{
 let SWEEP_ES=null, SWEEP_N=0, SWEEP_STEPS=100;
 const SW0={x:[],y:[],text:[],col:[]}, SW1={x:[],y:[],text:[],col:[]}, SW2={x:[],y:[],text:[],jx:[],jy:[],ok:[],rx:[],ry:[],align:[],jfro:[]}, SW3={x:[],y:[],text:[],jx:[],jy:[],ok:[],rx:[],ry:[],align:[],jfro:[]};   // SW0 = quadratic (T=0,Q-fixed) predicted t*; each 2/2b tick is SPLIT: left half = Σ|⟨r̂,vₖ⟩|/‖r‖ (align, top-3 NTK), right half = ‖J‖_F (jfro)
 const SW6={x:[],y:[],text:[],jx:[],jy:[],ok:[],rx:[],ry:[],align:[],jfro:[]};   // prediction-5 (magnified PS): x = signed-log Σ u₁ᵀ(QJr)v₁ (frozen-Q,J / evolving-r), y = signed-log Σ∇‖J‖ (actual). Only points with ‖J·ṙ‖>‖J̇·r‖ & below EoS at init
-const SW4={x:[],y:[],cd:[],text:[],col:[]};   // prediction-2c: x = A₊−A₋ = Σ_i σ_i(u_iᵀg)²/‖g‖² (squared-projection Rayleigh over ±k eigenspace of M_r, g=Jᵀr at t=0), y = ‖J_l‖−‖J₀‖ over l GD steps; cd = [σ, xdiff, dj]. Swept over init scale σ (0.1→10)
+const SW4={x:[],y:[],cd:[],text:[],col:[]};   // prediction-2c: x = A₊−A₋ = Σ_i σ_i(u_iᵀg)²/‖g‖² (squared-projection Rayleigh over ±k eigenspace of M_r, g=Jᵀr at t=0), y = ‖J_l‖−‖J₀‖ over l GD steps; cd = [σ, xdiff, dj]. Swept over the scaling factor σ (×standard init, 1=standard; 0.1→10)
 const SW5={x:[],y:[],cd:[],text:[],col:[]};   // prediction-2d: x = (A₊−A₋)/(A₊+A₋), y = (‖J_l‖−‖J₀‖)/(‖J₀‖+ε); cd = [σ, xnorm, djn]. Same σ-sweep, normalized both axes
 const SW7={x:[],y:[],cd:[],text:[],col:[]};   // prediction-2e: x = gᵀM_r g = (Jᵀr)ᵀ M_r (Jᵀr) (FULL operator via one HVP, not ±k-restricted), y = ‖J_l‖−‖J₀‖ over l GD steps; cd = [σ, x2e, dj]. Same σ-sweep, independent sw2e toggle
 function _pear(xs,ys){const n=xs.length;if(n<2)return NaN;
@@ -5257,7 +5400,7 @@ function addSweepPt(m){
   _scheduleSplit('p_sw6',SW6);   // prediction-5 (magnified PS): same split-tick style as Pred-2b, x = Σ u₁ᵀ(QJr)v₁
   try{Plotly.relayout('p_sw6',{'title.text':'Σ u₁ᵀ(QJr)v₁ vs Σ∇‖J‖ · steps='+(m.swps5n!=null?m.swps5n:'')+' · '+SW6.x.length+' pts ('+sweepCorrLabel(SW6)+')'});}catch(e){}
 }
-// prediction-2c/2d/2e (plots 4-5-7): DEDICATED σ-sweep (σ 0.1→10). 2c: x=A₊−A₋=Σσ_i(u_iᵀg)²/‖g‖² (squared-projection Rayleigh over M_r ±k eigenspace, g=Jᵀr at t=0), y=‖J_l‖−‖J₀‖ over l GD steps. 2d: both normalized. 2e: x=gᵀM_r g (full operator).
+// prediction-2c/2d/2e (plots 4-5-7): DEDICATED σ-sweep (σ = scaling factor ×standard init, 1=standard; 0.1→10). 2c: x=A₊−A₋=Σσ_i(u_iᵀg)²/‖g‖² (squared-projection Rayleigh over M_r ±k eigenspace, g=Jᵀr at t=0), y=‖J_l‖−‖J₀‖ over l GD steps. 2d: both normalized. 2e: x=gᵀM_r g (full operator).
 function addSweepPt2c(m){
   const lbl='σ='+(+m.std).toPrecision(2)+' · l='+(m.l!=null?m.l:4);
   if(m.xdiff!=null&&isFinite(m.xdiff)&&m.dj!=null&&isFinite(m.dj)){   // plot 2c: x = A₊−A₋ = Σσ_i(u_iᵀg)²/‖g‖² (squared-projection Rayleigh), y = ‖J_l‖−‖J₀‖. BOTH axes signed-log (span orders of magnitude); raw in hover.
@@ -5372,6 +5515,8 @@ function _runSweep(forceSame){   // forceSame=true ⇒ ignore the swport box and
   {const e=document.getElementById('swjl');if(e)ps.set('swjl',e.value||'4');}   // prediction-2c/2d: lookahead l — Δ‖J‖ over l GD steps for the y-axis
   {const e=document.getElementById('swcsmin');if(e)ps.set('swcsmin',e.value||'0.1');}   // prediction-2c/2d dedicated σ-sweep min
   {const e=document.getElementById('swcsmax');if(e)ps.set('swcsmax',e.value||'10');}   // prediction-2c/2d dedicated σ-sweep max
+  {const e=document.getElementById('sw2lr');ps.set('sw2lr',(e&&e.value.trim())?e.value.trim():'1e-7');}   // prediction-2c/2d/2e: σ≥1 (scaling-factor) lookahead lr (default 1e-7 ⇒ no catapult at high-sharpness large inits)
+  {const e=document.getElementById('sw2lrlo');ps.set('sw2lrlo',(e&&e.value.trim())?e.value.trim():'1e-3');}   // prediction-2c/2d/2e: σ<1 lookahead lr (default 1e-3 ⇒ low-sharpness small inits, fp32-clean)
   {const e=document.getElementById('en_sw2cd');ps.set('sw2cd',(e&&e.checked)?'1':'0');}   // prediction-2c/2d gate: only run+stream the dedicated σ-loop (plots 4-5) when the toggle is ON
   {const e=document.getElementById('en_sw2e');ps.set('sw2e',(e&&e.checked)?'1':'0');}     // prediction-2e gate: full-operator gᵀM_r g (plot 7), independent toggle
   ps.set('swTstart',(document.getElementById('swTstart').value||'0'));
@@ -5476,6 +5621,8 @@ function applyCaptureParams(params){
   {const e=document.getElementById('ssk');if(e&&('ssk' in params))e.value=String(params.ssk);}
   {const e=document.getElementById('enQspec');if(e&&('qspec' in params))e.checked=(String(params.qspec)==='1');}
   {const e=document.getElementById('qspeck');if(e&&('qspeck' in params))e.value=String(params.qspeck);}
+  {const e=document.getElementById('enS6f');if(e&&('s6f' in params)){e.checked=(String(params.s6f)==='1');toggleS6f();}}   // §6 fixed-basis toggle — restore + reveal from a loaded capture
+  {const e=document.getElementById('s6fk');if(e&&('s6fk' in params))e.value=String(params.s6fk);}
   {const e30=document.getElementById('en30'),e31=document.getElementById('en31');if(e30&&e31&&e30.checked&&e31.checked)e31.checked=false;}   // .checked= doesn't fire the en30/en31 mux; enforce it here (frozen-Q wins, matching the server) so a both-set capture doesn't force-show an empty sec_s23
   const pe=document.getElementById('preset');if(pe)pe.value='custom';
   if(typeof syncLossPanels==='function')syncLossPanels();
@@ -5616,6 +5763,31 @@ async function loadCapture(obj){
   }finally{ Plotly.restyle=_oRestyle; Plotly.react=_oReact; Plotly.extendTraces=_oExtend; PLOT_DECIM=_savedDecim; }
   st.textContent=`rendering …`; await _yield();
   await _spreadFlush();   // final render, frame-budgeted
+  // ── Prediction-1 (p_sw0/p_sw1) post-load re-render: addSweepPt does TWO restyles per plot (trace-0 = the t* data
+  //    scatter, then trace-1 = the y=x reference line). loadCapture's deferred restyle buffer (line ~5593) is keyed by
+  //    plot ID, so the 2nd restyle CLOBBERS the 1st ⇒ on load the DATA trace is dropped and only the line survives
+  //    (Prediction-1 looks empty). The SW0/SW1 arrays hold the full data, so re-apply both restyles now (real Plotly again).
+  try{ if(typeof SW0!=='undefined' && SW0.x && SW0.x.length){
+    const _mx=Math.max((typeof SWEEP_STEPS!=='undefined'?SWEEP_STEPS:1),Math.max.apply(null,SW0.x.concat(SW1.x).concat(SW0.y).concat([1])));
+    Plotly.restyle('p_sw0',{x:[SW0.x],y:[SW0.y],text:[SW0.text],'marker.color':[SW0.col]},[0]); Plotly.restyle('p_sw0',{x:[[0,_mx]],y:[[0,_mx]]},[1]);
+    Plotly.restyle('p_sw1',{x:[SW1.x],y:[SW1.y],text:[SW1.text],'marker.color':[SW1.col]},[0]); Plotly.restyle('p_sw1',{x:[[0,_mx]],y:[[0,_mx]]},[1]);
+    if(typeof _flushSplit==='function'){ for(const [id,S] of [['p_sw2',SW2],['p_sw3',SW3],['p_sw6',SW6]]){ try{_flushSplit(id,S);}catch(e){} } }   // Pred-2/2b + magnified-PS use debounced split-tick shapes ⇒ force a synchronous rebuild on load
+  }}catch(e){console.warn('post-load Prediction-1&2 sweep re-render failed',e);}
+  // ── Scrubber post-load re-sync (fixes a race shared by ALL rAF-coalesced snapshot scrubbers): during the deferred
+  //    replay an early coalescing rAF can bank an EARLY snapshot into loadCapture's last-wins restyle buffer while a
+  //    post-restore rAF advances the slider/label to the LAST snapshot; _spreadFlush() then re-applies the stale early
+  //    data → the scree/heatmap freezes on snapshot 0 under a "snapshot M/M" label until the user scrubs. Plotly.restyle
+  //    is real again here, so re-render each scrubber's LIVE (slider) index synchronously. Guarded: no-op if no snapshots.
+  const _resyncSnap=(len,sliderId,renderNow,cancelRaf)=>{ try{ if(len){ cancelRaf();
+    const sl=document.getElementById(sliderId); renderNow(sl? +sl.value : len-1); } }
+    catch(e){ console.warn('post-load scrubber re-sync failed',sliderId,e); } };
+  _resyncSnap((typeof QSPEC_SNAPS!=='undefined'?QSPEC_SNAPS.length:0),'qspec_slider',i=>qspecSnapRenderNow(i),()=>{if(QSPEC_RAF){cancelAnimationFrame(QSPEC_RAF);QSPEC_RAF=0;}QSPEC_PENDING=-1;});
+  _resyncSnap((typeof SLQ_SNAPS!=='undefined'?SLQ_SNAPS.length:0),'slq4_slider',i=>slqSnapRenderNow(i),()=>{if(SLQ_RAF){cancelAnimationFrame(SLQ_RAF);SLQ_RAF=0;}SLQ_PENDING=-1;});
+  _resyncSnap((typeof G3D_SNAPS!=='undefined'?G3D_SNAPS.length:0),'g3d_slider',i=>g3dRenderNow(i),()=>{if(G3D_RAF){cancelAnimationFrame(G3D_RAF);G3D_RAF=0;}G3D_PENDING=-1;});
+  _resyncSnap((typeof S12_SNAPS!=='undefined'?S12_SNAPS.length:0),'s12_slider',i=>s12RenderNow(i),()=>{if(S12_RAF){cancelAnimationFrame(S12_RAF);S12_RAF=0;}S12_PENDING=-1;});
+  _resyncSnap((typeof S20_SNAPS!=='undefined'?S20_SNAPS.length:0),'s20_slider',i=>s20RenderNow(i),()=>{if(S20_RAF){cancelAnimationFrame(S20_RAF);S20_RAF=0;}S20_PENDING=-1;});
+  _resyncSnap((typeof S21_SNAPS!=='undefined'?S21_SNAPS.length:0),'s21_slider',i=>s21RenderNow(i),()=>{if(S21_RAF){cancelAnimationFrame(S21_RAF);S21_RAF=0;}S21_PENDING=-1;});
+  _resyncSnap((typeof P6_SNAPS!=='undefined'?P6_SNAPS.length:0),'p6_slider',i=>p6RenderNow(i),()=>{if(P6_RAF){cancelAnimationFrame(P6_RAF);P6_RAF=0;}P6_PENDING=-1;});
   // ── Prediction-2c/2d/2e fix: p_sw4/p_sw5/p_sw7 live in the default-hidden sw_row2, so they were created 0×0 and had
   //    their data restyled WHILE HIDDEN → they render EMPTY (Plotly cached zero dimensions). Set the toggles per which
   //    metrics the capture carries (xdiff⇒2c/2d, x2e⇒2e), fit the row (grid sized to visible plots), then force a
@@ -5833,7 +6005,7 @@ document.getElementById('initscheme').addEventListener('change',syncInitScaleEna
 function cmpSyncInitScale(pre){const sc=document.getElementById(pre+'_initscheme'),el=document.getElementById(pre+'_init');if(!sc||!el)return;
   const off=(sc.value==='mup'||sc.value==='xavier_normal'||sc.value==='xavier_uniform');el.disabled=off;el.style.opacity=off?0.4:'';
   el.title=off?'ignored — '+sc.value+' sets the variance from fan-in/fan-out (canonical)':'';}
-['depth','width','act','bias','fixedx','inputstd','ssign','optimizer','lr','init','initscheme','nsamp','batch','indim','outdim','tgt','neig','kth','steps','eigevery','slqprobes','energyp','gson','seed','qapprox','qmode','tset','dataset','arch','loss','chmul','dmodel','nhead','nlayer','seqlen','degree','cvar','ksparse','angle','norm1','norm2','lab1','lab2']
+['depth','width','act','bias','fixedx','inputstd','ssign','optimizer','lr','init','initscheme','nsamp','batch','indim','outdim','tgt','neig','kth','steps','eigevery','slqprobes','slqblock','energyp','gson','seed','qapprox','qmode','tset','qinit','qfixt','qseed','dataset','arch','loss','chmul','dmodel','nhead','nlayer','seqlen','degree','cvar','ksparse','angle','norm1','norm2','lab1','lab2']
   .forEach(id=>{const el=document.getElementById(id);if(el)el.addEventListener('input',()=>{document.getElementById('preset').value='custom';});});
 // Each dataset has a sensible DEFAULT config (a preset): picking the dataset applies it (good lr/init/N
 // + the sections that actually run at that size) so you don't also have to hunt for the matching preset.
@@ -6319,7 +6491,7 @@ function makeCompareSection(pre, kind) {
 }
 
 function reorderPredictionLayout(){   // base panels §1-6 on top, then Prediction-1&2 → 3 → 4 → 4.2(ray) → 5.1(trace) → 5.2(σ₁) → 6
-  const order=['sec_1','sec_2','sec_3','sec_slqH','sec_4','sec_s21','sec_s27','sec_eds','sec_ss','sec_qspec','sec_sweep','sec_pred3_box','sec_pred4_box','sec_predray','sec_trace','sec_pred','sec_pred6'];   // sec_eds = Early-dynamics stats (NOT a prediction), ABOVE Prediction-1&2; sec_ss = Self-stabilization, right before Prediction-1&2; sec_predray = ★ Prediction 4.2 (ray), right after Prediction-4
+  const order=['sec_1','sec_2','sec_3','sec_slqH','sec_4','sec_s21','sec_s27','sec_eds','sec_ss','sec_qspec','sec_s6f','sec_sweep','sec_pred3_box','sec_pred4_box','sec_predray','sec_trace','sec_pred','sec_pred6'];   // sec_eds = Early-dynamics stats (NOT a prediction), ABOVE Prediction-1&2; sec_ss = Self-stabilization, right before Prediction-1&2; sec_predray = ★ Prediction 4.2 (ray), right after Prediction-4
   const anchor=document.getElementById('sec_pred'); if(!anchor)return; const parent=anchor.parentNode; if(!parent)return;
   for(const id of order){const e=document.getElementById(id); if(e&&e.parentNode===parent)parent.insertBefore(e,anchor);}   // insert each before sec_pred (5.2 is the anchor)
   {const p6=document.getElementById('sec_pred6'); if(p6&&p6.parentNode===parent)parent.insertBefore(p6, anchor.nextSibling);}   // Prediction-6 goes AFTER 5.2 (sec_pred), so the numbering reads 1&2→3→4→5.1→5.2→6

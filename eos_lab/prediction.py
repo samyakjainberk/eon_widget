@@ -284,11 +284,12 @@ def sweep(cfg, npairs=None, K=None, Tstart=None, steps=None, seed=None,
     swmrk = max(1, int(getattr(cfg, "swmrk", 10)))
     swcsmin = max(1e-6, float(getattr(cfg, "swcsmin", 0.1) or 0.1))
     swcsmax = max(swcsmin * 1.01, float(getattr(cfg, "swcsmax", 10.0) or 10.0))
-    _lgd = float(getattr(cfg, "lr", 0.05)); _ljl = max(1, int(getattr(cfg, "swjl", 4))); _EPS2D = 1e-12   # GD lr, lookahead l (k0=0), 2d ε
+    _lgd_hi = float(getattr(cfg, "sw2lr", 1e-7)); _lgd_lo = float(getattr(cfg, "sw2lrlo", 1e-3)); _ljl = max(1, int(getattr(cfg, "swjl", 4))); _EPS2D = 1e-12   # 2c/2d/2e lookahead lr, σ-DEPENDENT (mirrors server): scaling-factor σ<1 ⇒ sw2lrlo (1e-3), σ≥1 ⇒ sw2lr (1e-7, avoids the catapult). eos_lab is fp64 so no upcast needed.
     _lo, _hi = math.log(swcsmin), math.log(swcsmax)
     for si in range(npairs if (_sw2cd or _sw2e) else 0):   # range(0) ⇒ skip entirely when BOTH toggles are off
-        std_c = math.exp(_lo + (_hi - _lo) * (si / max(1, npairs - 1)))   # deterministic log-spaced σ grid
-        th_c = model.init_theta(seed0 + 1, std_c)
+        sig_c = math.exp(_lo + (_hi - _lo) * (si / max(1, npairs - 1)))   # σ = SCALING FACTOR on the standard-init std (σ=1 ⇒ standard parameterization); log-spaced grid
+        _lgd = _lgd_lo if sig_c < 1.0 else _lgd_hi                         # σ-dependent lookahead lr (split at scaling factor = 1)
+        th_c = sig_c * model.init_theta(seed0 + 1, 1.0)                    # standard/canonical init (initScale=1) scaled by σ; weights only (biases 0) ⇒ σ multiplies the weight std for every scheme (mirrors server.py)
         out_c = model.forward(th_c, X)
         if not (float(loss.value(out_c, Y, N)) < 1e12):
             continue                                       # skip a NaN/blow-up init (rare at large σ)
@@ -316,7 +317,7 @@ def sweep(cfg, npairs=None, K=None, Tstart=None, steps=None, seed=None,
             Jcl, _ = jac_cols(model, th_g, X); jl = float(Jcl[:M].norm())                  # ‖J_l‖_F
             if jl == jl:
                 dj = jl - j0; djn = (jl - j0) / (j0 + _EPS2D)
-        yield {"type": "sweeppt2c", "i": si, "std": float(std_c),
+        yield {"type": "sweeppt2c", "i": si, "std": float(sig_c),   # "std" = σ scaling factor (×standard init; 1 ⇒ standard), NOT an absolute std
                "xdiff": (xdiff if (xdiff is not None and xdiff == xdiff) else None),
                "xnorm": (xnorm if (xnorm is not None and xnorm == xnorm) else None),
                "x2e": x2e,
