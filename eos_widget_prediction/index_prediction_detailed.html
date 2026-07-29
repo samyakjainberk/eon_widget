@@ -6107,6 +6107,10 @@ function applyCaptureParams(params){
   if(!params)return;
   for(const id of QUERY_IDS){if(id in params){const el=document.getElementById(id);if(el)el.value=String(params[id]);}}
   for(const [k,id] of SEC_TOGGLE_MAP){const el=document.getElementById(id);if(el&&k in params)el.checked=(String(params[k])==='1');}
+  // ★ restore the grok toggles engw1–10 from the capture's gw1..gw10 params + REVEAL their sections (toggleGwN),
+  //   so a loaded capture SHOWS its grok panels (they're not in SEC_TOGGLE_MAP) and gw14Note stamps the σ/lr badge.
+  for(let i=1;i<=10;i++){const cb=document.getElementById('engw'+i);
+    if(cb&&('gw'+i in params)){cb.checked=(String(params['gw'+i])==='1');const fn=window['toggleGw'+i];if(typeof fn==='function')try{fn();}catch(e){}}}
   {const e=document.getElementById('enP6');if(e&&('s39' in params))e.checked=(String(params.s39)==='1');}   // prediction-6 toggle (not in SEC_TOGGLE_MAP) — restore from the s39 flag so a loaded capture re-shows its histograms
   {const e=document.getElementById('enEDS');if(e&&('s42' in params))e.checked=(String(params.s42)==='1');}   // early-dynamics toggle — restore from s42 so a loaded capture re-shows it
   {const e=document.getElementById('enSS');if(e&&('ss' in params))e.checked=(String(params.ss)==='1');}      // self-stabilization toggle — restore from ss so a loaded capture re-shows it
