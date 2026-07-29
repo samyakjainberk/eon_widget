@@ -1258,6 +1258,14 @@ def build_spec(inDim, width, depth, act, useBias, outDim):
     return spec, off
 
 
+def spec_lastlayer_slice(spec, p):
+    """(offset, length) of the last-layer WEIGHT block in the flat θ (for output/last-layer scaling). None if no spec."""
+    if not spec:
+        return None
+    din, dout, act, wOff, bOff = spec[-1]
+    return (wOff, din * dout)
+
+
 def actf(name, z):
     if name == "tanh":
         return torch.tanh(z)
@@ -1265,6 +1273,20 @@ def actf(name, z):
         return torch.where(z > 0, z, torch.expm1(z))
     if name == "quadratic":
         return z * z
+    if name == "relu":
+        return torch.clamp(z, min=0.0)
+    if name == "gelu":
+        return 0.5 * z * (1.0 + torch.erf(z / 1.4142135623730951))
+    if name == "sine" or name == "sin":
+        return torch.sin(z)
+    if name == "bspline":                                         # KAN-style fixed cubic-B-spline activation (arXiv:2503.10065): 0.5·z + Σ_j c_j·B(z−k_j)
+        out = 0.5 * z
+        for kk, cc in ((-3., .6), (-2., -.6), (-1., .6), (0., -.6), (1., .6), (2., -.6), (3., .6)):
+            t = z - kk; a = t.abs()
+            B = torch.where(a < 1, 2.0 / 3.0 - t * t + a * a * a * 0.5,
+                            torch.where(a < 2, torch.clamp(2.0 - a, min=0.0) ** 3 / 6.0, torch.zeros_like(t)))
+            out = out + cc * B
+        return out
     return z
 
 
@@ -1276,6 +1298,21 @@ def actd(name, z):
         return torch.where(z > 0, torch.ones_like(z), torch.exp(z))
     if name == "quadratic":
         return 2 * z
+    if name == "relu":
+        return (z > 0).to(z.dtype)
+    if name == "gelu":                                            # d/dz[z·Φ(z)] = Φ(z) + z·φ(z), φ(z)=exp(-z²/2)/√(2π)
+        Phi = 0.5 * (1.0 + torch.erf(z / 1.4142135623730951))
+        return Phi + z * torch.exp(-0.5 * z * z) / 2.5066282746310002
+    if name == "sine" or name == "sin":
+        return torch.cos(z)
+    if name == "bspline":                                         # d/dz of the fixed cubic-B-spline activation
+        out = torch.full_like(z, 0.5)
+        for kk, cc in ((-3., .6), (-2., -.6), (-1., .6), (0., -.6), (1., .6), (2., -.6), (3., .6)):
+            t = z - kk; a = t.abs(); s = torch.sign(t)
+            dB = torch.where(a < 1, -2.0 * t + 1.5 * t * a,
+                             torch.where(a < 2, -0.5 * torch.clamp(2.0 - a, min=0.0) ** 2 * s, torch.zeros_like(t)))
+            out = out + cc * dB
+        return out
     return torch.ones_like(z)
 
 
@@ -1810,6 +1847,41 @@ class DiagLinModel(Model):
         return (draw * sc).to(dtype=DTYPE, device=_dev())
 
 
+class LsaModel(AutogradModel):
+    """ONE-LAYER LINEAR SELF-ATTENTION for in-context linear regression (Bordelon/… , arXiv:2501.16265).
+    Each input sample is the FLATTENED embedding matrix Z=[[x₁ … x_N x_q];[y₁ … y_N 0]] ∈ ℝ^{(D+1)×(N+1)}
+    (D = feature dim = indim, N = context length = seqlen). The merged multi-head readout is the bottom-right
+    entry of ATTN_M(Z)=Z+Σ_h (1/N) Wᵥ_h Z Zᵀ W^{KQ}_h Z, which (since only the last row vₕ of Wᵥ and the first
+    D columns Bₕ of W^{KQ} survive that entry) reduces to
+        ŷ_q = Σ_{h=1}^{H} (1/N) · vₕᵀ (Z Zᵀ) Bₕ x_q ,   vₕ∈ℝ^{D+1}, Bₕ∈ℝ^{(D+1)×D}.
+    It is BILINEAR in (v,B): from SMALL init the origin is a saddle and heads/spectral directions activate one at
+    a time ⇒ saddle-to-saddle dynamics (cf. [[toy-saddle-fragility]] / DiagLinModel). MSE on ŷ_q. GPU backend."""
+    def __init__(self, inDim, outDim, P):
+        super().__init__()
+        self.D = max(1, int(P.get("indim", 8)))
+        self.Nc = max(1, int(P.get("seqlen", 16)))
+        self.H = max(1, int(P.get("nhead", 1)))
+        exp = (self.D + 1) * (self.Nc + 1)
+        assert inDim == exp, f"LsaModel: iclreg inDim must be (D+1)(N+1)={exp}, got {inDim}"
+        self.in_shape, self.oc = (inDim,), 1
+        for h in range(self.H):
+            self._add(f"v{h}", (self.D + 1,), fan_in=self.D + 1)          # value readout  vₕ (last row of Wᵥ_h)
+            self._add(f"B{h}", (self.D + 1, self.D), fan_in=self.D + 1)   # key-query  Bₕ (live cols of W^{KQ}_h)
+
+    def _net(self, p, X):
+        B = X.shape[0]; D, Nc = self.D, self.Nc
+        Z = X.view(B, D + 1, Nc + 1)                                       # (B, D+1, N+1)
+        xq = Z[:, :D, Nc]                                                  # (B, D)   query features (top D of last col)
+        G = (Z @ Z.transpose(1, 2)) / Nc                                   # (B, D+1, D+1)  = (1/N) Z Zᵀ  (linear-attn gram)
+        out = X.new_zeros(B)
+        for h in range(self.H):
+            v = p[f"v{h}"]; Bh = p[f"B{h}"]                                # (D+1,), (D+1, D)
+            Bx = xq @ Bh.t()                                              # (B, D+1)      = W^{KQ} z_q
+            GBx = torch.einsum("bij,bj->bi", G, Bx)                       # (B, D+1)      = (Z Zᵀ/N)(W^{KQ} z_q)
+            out = out + GBx @ v                                          # (B,)          += vᵀ(·)
+        return out.view(B, 1)
+
+
 def hvpF(th, X, v):
     """Function-Hessian (∇²Σf) · v."""
     if _TL.model.exact_hvp:
@@ -1825,7 +1897,24 @@ def hvpL(th, X, Y, v):
 
 
 def hvpS(th, X, v, c):
-    """Residual term (Σ_a c_a ∇²f_a) · v."""
+    """Residual term (Σ_a c_a ∇²f_a) · v = M_c·v (the M_r operator when c=r). Honours the `qinit` mode via
+    _TL.qcfg — SAME chokepoint contract as jac_hvp, since the M_r-based predictions (Pred-4, §19/§20/§25)
+    reach Q through HERE, not jac_hvp. fix ⇒ evaluate the function Hessian at frozen θ_t (J stays live);
+    random ⇒ M_c·v = Σ_a c_a (Q_rand_a · v) from the dense random per-sample Q."""
+    qc = getattr(_TL, "qcfg", None)
+    if qc is not None and qc["mode"] != "evolve" and qc["theta_t"] is not None:
+        if qc["mode"] == "fix":
+            th = qc["theta_t"]                              # freeze Q at θ_t; fall through (exact or FD both use th)
+        else:
+            Q = qc["Qrand"]
+            if Q is not None:
+                if Q.dim() == 2:                            # SHARED single dense random Q S (p,p): memory-cheap fallback
+                    cs = float(c.reshape(-1).to(Q.dtype).sum())   #   for large models where the per-sample (M,p,p) won't fit
+                    return (cs * (Q @ v.to(Q.dtype))).to(v.dtype)  # M_c·v = (Σ_a c_a)·(S·v)
+                M = Q.shape[0]
+                cf = c.reshape(-1)[:M].to(Q.dtype)          # per-output cotangent weights c_a
+                Qv = Q @ v.to(Q.dtype)                      # (M,p) = {Q_rand_a · v}
+                return (cf @ Qv).to(v.dtype)                # p = Σ_a c_a Q_rand_a v = M_c·v
     if _TL.model.exact_hvp:
         return _TL.model.hvp(th, X, "S", v, c=c)
     return (gradW(th + EPS * v, X, c) - gradW(th - EPS * v, X, c)) / (2 * EPS)
@@ -1923,6 +2012,36 @@ def _eds_eigpairs(th, X, cotangent, p, K, dtype):
     kt = min(Klan, k); bs = max(kt, k - Klan)              # top-K ⊕ bottom-K DISTINCT positions
     positions = list(range(kt)) + list(range(bs, k))
     return [(float(mu[int(desc[pos])]), ritz(int(desc[pos]))) for pos in positions]
+
+
+QSPEC_FULL_CAP = 20000   # Q-spectrum: max p for the EXACT full-spectrum path (materialize the p×p operator + eigvalsh). Covers the width-32 cifar/mnist MLP (p≈17642). Above this ⇒ truncated top⊕bottom-k Lanczos (a 20000² matrix is 1.6GB fp32 + a heavy eig).
+
+def _qspec_full_eigs(th, X, cotangent):
+    """Q-SPECTRUM (full): ALL p eigenvalues (descending) of the operator Σ_a cotangent_a ∇²f_a — the SAME operator
+    _eds_eigpairs samples via Lanczos, but here the WHOLE spectrum, not just the extremes. cotangent=r ⇒ Q_r=Σ_k r_kQ_k;
+    cotangent=1 ⇒ H=Σ_k Q_k. Exact for MLP: Σ_a c_a∇²f_a = ∇²_θ (Σ_a c_a f_a) = the Hessian of the scalar (f·c).sum(),
+    materialized densely by autograd (torch.func.hessian through the hand-written fwd — matches FD hvpS to ~2e-5 but is
+    exact, so the near-zero bulk is clean) then eigvalsh. MLP + p≤QSPEC_FULL_CAP only (caller gates). eig in fp64 for
+    small p (clean bulk); for large p (>6000) fp32 — GPU-friendly, and the bulk there is numerically-zero anyway."""
+    m = _TL.model
+    cc = cotangent.detach()
+    qc = _qinit_active()                                     # honour the qinit override (else the Q-spectrum panel
+    if qc is not None:                                       #   would show the TRUE Q while the trackers use fix/random Q)
+        if qc["mode"] == "fix":
+            th = qc["theta_t"]                              # true Q spectrum, evaluated at the FROZEN θ_t
+        else:                                                # random: the dense operator IS Σ_a c_a Q_rand_a
+            Q = qc["Qrand"]
+            if Q is not None:
+                cf = cc.reshape(-1)[:Q.shape[0]].to(Q.dtype)
+                Hr = torch.einsum('a,apq->pq', cf, Q)       # (p,p) = Σ_a c_a Q_rand_a
+                Hr = 0.5 * (Hr + Hr.t())
+                evr = torch.linalg.eigvalsh(Hr if Hr.shape[0] > 6000 else Hr.to(torch.float64))
+                return sorted((float(x) for x in evr), reverse=True)
+    scal = lambda t: (fwd(t, m.spec, X)[0] * cc).sum()
+    H = torch.func.hessian(scal)(th.detach())               # dense p×p operator (autograd through fwd)
+    H = 0.5 * (H + H.t())                                    # symmetrize away fp asymmetry
+    ev = torch.linalg.eigvalsh(H if H.shape[0] > 6000 else H.to(torch.float64))   # ALL p eigenvalues, ascending
+    return sorted((float(x) for x in ev), reverse=True)     # descending (rank 0 = largest)
 
 
 SEC26_SEED = SEC20_SEED   # §26 reuses §20's M_r Lanczos start ⇒ identical M_r eigenvectors (byte-parity)
@@ -2533,8 +2652,136 @@ def jac_cols(th, X):
     return _TL.model.jac_cols(th, X)
 
 
+# ── Q-INIT MODE: how the function-Hessian tensor Q_k=∇²f_k enters the prediction trackers ────────────
+# A GLOBAL toggle (param `qinit`) over EVERY Q·v computed by jac_hvp — the SINGLE chokepoint through
+# which the whole prediction machinery (Pred-3/4/5.1/6 + all Q-dependent diagnostics) touches Q. It
+# lets the user probe "how much does the true function Hessian matter?" by substituting Q wholesale.
+# Modes:
+#   evolve  Q = ∇²f(θ) at whatever θ each tracker passes — the CURRENT behaviour, the DEFAULT.
+#   fix     Q = ∇²f(θ_t) frozen at iteration qfixt (default t=0 ⇒ θ₀). The Jacobian J stays LIVE, so
+#           this isolates the effect of a frozen function Hessian while gradients keep evolving.
+#   gauss / bern / unif   Q_k = a DENSE per-sample SYMMETRIC matrix with iid entries — N(0,1) / ±1 /
+#           U(-1,1) — symmetrised (S+Sᵀ)/2, drawn ONCE at θ_t and FROBENIUS-MATCHED per sample to the
+#           true ‖∇²f_k(θ_t)‖_F ⇒ "random-structure Q at the correct magnitude". Small nets only: needs
+#           the (M,p,p) tensor, gated by M·p² ≤ qrandcap (else it silently falls back to evolve + a note).
+# ONLY jac_hvp changes; jac_cols (the Jacobian J) is identical in every mode. _TL.qcfg holds the state
+# (per request; reset at the top of run_stream). MIRRORS: eos_lab/index.html do NOT yet implement this
+# (server-only toggle for now — the two prediction widgets drive run_stream).
+
+def _q_frozen_fro2(theta_t, X, M, probes, seed):
+    """Per-sample ‖Q_k(θ_t)‖_F² via Hutchinson: E_v‖Q_k v‖²=tr(Q_kᵀQ_k)=‖Q_k‖_F² for unit-var v (FD Q·v)."""
+    p = theta_t.shape[0]
+    g = torch.Generator(device=theta_t.device); g.manual_seed(int(seed) & 0x7FFFFFFF)
+    acc = torch.zeros(M, dtype=theta_t.dtype, device=theta_t.device)
+    for _ in range(max(1, probes)):
+        v = torch.randn(p, generator=g, dtype=theta_t.dtype, device=theta_t.device)
+        cp, _ = jac_cols(theta_t + EPS * v, X); cm, _ = jac_cols(theta_t - EPS * v, X)
+        u = ((cp - cm) / (2 * EPS))[:M]                    # (M,p) = {Q_k v}
+        acc += (u * u).sum(dim=1)
+    return acc / max(1, probes)                            # (M,)
+
+
+def _build_shared_randQ(theta_t, X, M, dist, seed, probes):
+    """ONE dense symmetric random Q S (p,p), iid `dist` entries, Frobenius-matched to the MEAN per-sample
+    ‖Q_a(θ_t)‖_F. Memory-cheap fallback for the 'random (dense)' null when the per-sample (M,p,p) tensor
+    won't fit: applied as M_c·v = (Σ_a c_a)·(S·v) (hvpS detects the 2-D Q). One (p,p) fits models ~M× larger."""
+    p = theta_t.shape[0]
+    fro2 = _q_frozen_fro2(theta_t, X, M, probes, (int(seed) ^ 0x5F3759DF) & 0x7FFFFFFF)   # (M,) per-sample ‖Q_a‖²
+    tgt = math.sqrt(max(float(fro2.mean()), 0.0))
+    gk = torch.Generator(device=theta_t.device); gk.manual_seed(int(seed) & 0x7FFFFFFFFFFF)
+    if dist == "gauss":
+        G = torch.randn(p, p, generator=gk, dtype=theta_t.dtype, device=theta_t.device)
+    elif dist == "bern":
+        G = torch.randint(0, 2, (p, p), generator=gk, device=theta_t.device).to(theta_t.dtype) * 2 - 1
+    else:
+        G = torch.rand(p, p, generator=gk, dtype=theta_t.dtype, device=theta_t.device) * 2 - 1
+    S = (G + G.t()) * 0.5
+    fn = float(S.norm())
+    if fn > 0:
+        S = S * (tgt / fn)
+    return S
+
+
+def _build_randQ(theta_t, X, M, dist, seed, probes):
+    """Dense per-sample symmetric random Q (M,p,p), iid `dist` entries, Frobenius-matched to Q(θ_t)."""
+    p = theta_t.shape[0]
+    fro2 = _q_frozen_fro2(theta_t, X, M, probes, (int(seed) ^ 0x5F3759DF) & 0x7FFFFFFF)   # (M,) targets
+    Q = torch.empty(M, p, p, dtype=theta_t.dtype, device=theta_t.device)
+    for k in range(M):
+        gk = torch.Generator(device=theta_t.device); gk.manual_seed((int(seed) * 1000003 + k) & 0x7FFFFFFFFFFF)
+        if dist == "gauss":
+            G = torch.randn(p, p, generator=gk, dtype=theta_t.dtype, device=theta_t.device)
+        elif dist == "bern":
+            G = torch.randint(0, 2, (p, p), generator=gk, device=theta_t.device).to(theta_t.dtype) * 2 - 1
+        else:  # unif
+            G = torch.rand(p, p, generator=gk, dtype=theta_t.dtype, device=theta_t.device) * 2 - 1
+        S = (G + G.t()) * 0.5                              # symmetric random function-Hessian
+        fn = float(S.norm())
+        if fn > 0:
+            S = S * (math.sqrt(max(float(fro2[k]), 0.0)) / fn)   # match ‖Q_k(θ_t)‖_F
+        Q[k] = S
+    return Q
+
+
+def _qcfg_snapshot(th, X):
+    """Capture θ_t (and build the random Q) the first time the freeze iteration is reached."""
+    qc = getattr(_TL, "qcfg", None)
+    if qc is None or qc["mode"] == "evolve" or qc["theta_t"] is not None:
+        return
+    qc["theta_t"] = th.detach().clone()
+    if qc["mode"] in ("gauss", "bern", "unif"):
+        qc["Qrand"] = _build_randQ(qc["theta_t"], X, qc["M"], qc["mode"], qc["seed"], qc["probes"])
+
+
+def _qcfg_setup(P, th, X, M):
+    """Parse the qinit params into _TL.qcfg; snapshot immediately when freezing at t=0 (θ₀ = th here)."""
+    mode = str(P.get("qinit", "evolve")).lower()
+    if mode not in ("evolve", "fix", "gauss", "bern", "unif"):
+        mode = "evolve"
+    qc = {"mode": mode, "fixt": max(0, int(P.get("qfixt", 0))), "seed": int(P.get("qseed", 0)),
+          "probes": max(1, int(P.get("qprobes", 8))), "cap": float(P.get("qrandcap", 2e8)),
+          "M": M, "theta_t": None, "Qrand": None, "note": None}
+    _TL.qcfg = qc
+    if mode in ("gauss", "bern", "unif"):
+        p = th.shape[0]
+        if M * p * p > qc["cap"]:
+            qc["note"] = (f"random-Q needs M·p²={M * p * p:.2e} > qrandcap={qc['cap']:.1e} "
+                          f"(p={p}, M={M}); falling back to evolve — use a smaller net/nsamp")
+            qc["mode"] = "evolve"
+        else:
+            # random Q rows are FIXED to the snapshot samples (pool rows 0..M-1). Under MINIBATCHING a different
+            # bs-subset is drawn each step, so row a's residual would pair with an unrelated sample's Q magnitude ⇒
+            # the per-sample Frobenius match is only valid FULL-BATCH. (fix mode is unaffected: it recomputes true Q
+            # on the current minibatch.) Warn rather than silently mis-pair.
+            _bs = int(P.get("batch", 0))
+            if 0 < _bs < int(P.get("nsamp", M)):
+                qc["note"] = (f"random-Q is FULL-BATCH-only: batch={_bs} < nsamp — the per-sample Frobenius match "
+                              f"mis-pairs residuals with Q magnitudes under minibatching. Use --batch 0.")
+    if qc["mode"] != "evolve" and qc["fixt"] == 0:
+        _qcfg_snapshot(th, X)                              # θ₀ is available now (th == θ₀ at setup)
+    return qc
+
+
+def _qinit_active():
+    """Return _TL.qcfg iff a non-evolve qinit override (fix/gauss/bern/unif) is ACTIVE with θ_t snapshotted;
+    else None. Used by the non-chokepoint Q panels (§12 MLP, qspec) so they honour the override too — every
+    Q-dependent quantity in one capture must use the SAME Q (else a section silently mixes true + overridden Q)."""
+    qc = getattr(_TL, "qcfg", None)
+    return qc if (qc is not None and qc["mode"] != "evolve" and qc.get("theta_t") is not None) else None
+
+
 def jac_hvp(th, X, z):
-    """{∇²f_a · z}_a — central difference of jac_cols. Shape (M, p)."""
+    """{∇²f_a · z}_a — central difference of jac_cols (Q·z). Honours the `qinit` mode via _TL.qcfg."""
+    qc = getattr(_TL, "qcfg", None)
+    if qc is not None and qc["mode"] != "evolve" and qc["theta_t"] is not None:
+        if qc["mode"] == "fix":
+            tq = qc["theta_t"]
+            cp, _ = jac_cols(tq + EPS * z, X)
+            cm, _ = jac_cols(tq - EPS * z, X)
+            return (cp - cm) / (2 * EPS)
+        Q = qc["Qrand"]
+        if Q is not None:
+            return (Q @ z.to(Q.dtype)).to(z.dtype)         # (M,p,p)@(p,) → (M,p): random Q·z
     cp, _ = jac_cols(th + EPS * z, X)
     cm, _ = jac_cols(th - EPS * z, X)
     return (cp - cm) / (2 * EPS)
@@ -2917,18 +3164,72 @@ def _hutch_trace(hvp, p, nprobe, seed):
     return s / max(1, nprobe)
 
 
-def slq_density(hvp, p, nprobe, m, ngrid, seed):
+def _block_lanczos_core(hvp, p, b, m, seed, dt=None):
+    """BLOCK Lanczos with block size b (the block generalization of _lanczos_core). Advances b probe
+    columns TOGETHER via the three-term block recurrence A·Q_j = Q_{j-1}B_{j-1}ᵀ + Q_j A_j + Q_{j+1}B_j
+    (A_j=Q_jᵀA Q_j the b×b diagonal block, B_j the b×b QR factor of the residual), with full
+    reorthogonalization for stability. Returns the symmetric block-tridiagonal T (kb×kb, float64) whose
+    eigenpairs are the block-SLQ quadrature. Block Lanczos resolves CLUSTERED/DEGENERATE eigenvalues that
+    single-vector Lanczos collapses (each block iteration can surface up to b eigenvalues of a cluster),
+    so the estimated density is closer to the true spectrum. dt = working precision."""
+    dt = dt if dt is not None else DTYPE
+    b = max(1, min(b, p))
+    g = torch.Generator(device=_dev()); g.manual_seed(int(seed) & 0x7FFFFFFF)
+    Qj, _ = torch.linalg.qr(torch.randn(p, b, dtype=dt, device=_dev(), generator=g))   # orthonormal start block (p×b)
+    Qblocks = []; A = []; B = []
+    Qprev = torch.zeros(p, b, dtype=dt, device=_dev())
+    Bprev = torch.zeros(b, b, dtype=dt, device=_dev())
+    for _ in range(min(max(1, p // b), m)):
+        Qblocks.append(Qj)
+        W = torch.stack([hvp(Qj[:, c]) for c in range(b)], dim=1)   # (p×b) = A·Q_j (b single-vector HVPs)
+        Aj = Qj.t() @ W
+        Aj = 0.5 * (Aj + Aj.t())                                     # symmetrize the diagonal block
+        A.append(Aj)
+        W = W - Qj @ Aj - Qprev @ Bprev.t()
+        Qall = torch.cat(Qblocks, dim=1)                             # full reorthogonalization (twice) vs all prior blocks
+        for _ in range(2):
+            W = W - Qall @ (Qall.t() @ W)
+        Qnext, Bj = torch.linalg.qr(W)                              # (p×b), (b×b) upper-triangular
+        B.append(Bj)
+        if float(Bj.abs().max()) < 1e-10:
+            break
+        Qprev = Qj; Bprev = Bj; Qj = Qnext
+    k = len(A); kb = k * b
+    T = torch.zeros(kb, kb, dtype=torch.float64)
+    for i in range(k):
+        T[i * b:(i + 1) * b, i * b:(i + 1) * b] = A[i].to(torch.float64)
+        if i < k - 1:
+            T[(i + 1) * b:(i + 2) * b, i * b:(i + 1) * b] = B[i].to(torch.float64)          # sub-diagonal block
+            T[i * b:(i + 1) * b, (i + 1) * b:(i + 2) * b] = B[i].t().to(torch.float64)      # symmetric super-diagonal
+    return T, b, k
+
+
+def slq_density(hvp, p, nprobe, m, ngrid, seed, block=1):
+    """Stochastic Lanczos Quadrature spectral density. block=1 ⇒ standard single-vector SLQ (default);
+    block=b>1 ⇒ BLOCK SLQ (b probe columns per block-Lanczos run) — better on clustered/degenerate spectra.
+    Quadrature weight per Ritz value = squared norm of the eigenvector's FIRST block (single-component when
+    b=1), normalized so the density integrates to ~1."""
     import numpy as np
     TH = []
     W = []
-    for pr in range(nprobe):
-        _, T, k = _lanczos_core(hvp, p, min(p, m), (seed + pr * 1315423) & 0xFFFFFFFF)
-        val, V = _safe_eigh(T)                       # robust to degenerate SLQ tridiagonals (cifar2/mnist2 flat regions)
-        val = val.numpy()
-        v0 = V[0, :].numpy()
-        for i in range(k):
-            TH.append(float(val[i]))
-            W.append(float(v0[i] ** 2 / nprobe))
+    if block > 1:
+        for pr in range(nprobe):
+            T, b, k = _block_lanczos_core(hvp, p, block, min(max(1, p // block), m), (seed + pr * 1315423) & 0xFFFFFFFF)
+            val, V = _safe_eigh(T)
+            val = val.numpy()
+            w = (V[:b, :] ** 2).sum(dim=0).numpy()   # ‖first b-block of eigvec i‖² = Σ_{r<b} V[r,i]²  (block quadrature weight)
+            for i in range(len(val)):
+                TH.append(float(val[i]))
+                W.append(float(w[i] / (b * nprobe)))
+    else:
+        for pr in range(nprobe):
+            _, T, k = _lanczos_core(hvp, p, min(p, m), (seed + pr * 1315423) & 0xFFFFFFFF)
+            val, V = _safe_eigh(T)                       # robust to degenerate SLQ tridiagonals (cifar2/mnist2 flat regions)
+            val = val.numpy()
+            v0 = V[0, :].numpy()
+            for i in range(k):
+                TH.append(float(val[i]))
+                W.append(float(v0[i] ** 2 / nprobe))
     TH = np.asarray(TH)
     W = np.asarray(W)
     lo, hi = float(TH.min()), float(TH.max())
@@ -3364,9 +3665,149 @@ def load_owt(n, block, seed, split="train"):
             torch.tensor(Y, dtype=torch.long, device=_dev()))
 
 
+def _spline_act(z, psi, srange):
+    """Learnable piecewise-LINEAR spline activation (arXiv:2503.10065): interpolate the nc learnable control
+    points ψ over knots linspace(−srange,+srange,nc). The end knots hold the boundary values (clamped), so the
+    activation is exactly the interpolation the paper uses — an UNBIASED (no smoothness/monotonicity) parametrization."""
+    nc = psi.shape[0]
+    t = ((z + srange) / (2.0 * srange) * (nc - 1)).clamp(0.0, nc - 1 - 1e-6)
+    i0 = t.floor().long(); frac = t - i0.to(t.dtype)
+    p0 = psi[i0]; p1 = psi[(i0 + 1).clamp(max=nc - 1)]
+    return p0 * (1.0 - frac) + p1 * frac
+
+
+class SplineMlpModel(AutogradModel):
+    """MLP with LEARNABLE linear-spline activations (KAN-style; arXiv:2503.10065). Each hidden layer applies a
+    shared learnable activation g_ψ implemented as a linear spline with `nc` control points ψ over [−srange,+srange]
+    (the paper's ~50 points in [−5,+5]). ψ are EXTRA trainable parameters (part of θ) — this removes the ReLU
+    simplicity bias and is what lets the spline net grok. Autograd ⇒ exact grads / HVP (no hand-written bwd)."""
+    def __init__(self, inDim, width, depth, outDim, useBias, nc=50, srange=5.0):
+        super().__init__()
+        self.nc = int(nc); self.srange = float(srange)
+        self.useBias = (useBias == "1" or useBias is True or useBias == 1)
+        dims = [int(inDim)] + [int(width)] * int(depth) + [int(outDim)]
+        self.nlayers = len(dims) - 1
+        for l in range(self.nlayers):
+            din, dout = dims[l], dims[l + 1]
+            self._add(f"w{l}", (din, dout), fan_in=din, init="n")
+            if self.useBias: self._add(f"b{l}", (dout,), init="0")
+            if l < self.nlayers - 1: self._add(f"psi{l}", (self.nc,), init="0")   # control points → set to identity in init_theta
+        self.in_shape = (int(inDim),); self.oc = int(outDim)
+    def _net(self, p, X):
+        a = X.reshape(X.shape[0], -1)
+        for l in range(self.nlayers):
+            z = a @ p[f"w{l}"]
+            if self.useBias: z = z + p[f"b{l}"]
+            a = _spline_act(z, p[f"psi{l}"], self.srange) if l < self.nlayers - 1 else z
+        return a
+    def init_theta(self, seed, initScale):
+        th = super().init_theta(seed, initScale)
+        knots = torch.linspace(-self.srange, self.srange, self.nc, dtype=th.dtype, device=th.device)
+        for name, shape, numel, off, fi, ini in self._specs:
+            if name.startswith("psi"): th[off:off + numel] = knots   # init g_ψ(x) ≈ x (identity), then it learns
+        return th
+
+
+class TunedSplineMlpModel(AutogradModel):
+    """MLP with a SHARED, FIXED (non-trainable) spline activation whose shape ψ is TUNED at init to raise the ratio
+    gᵀM_r g / gᵀJJᵀg (2nd-order M_r=Σ_k r_kQ_k vs 1st-order JJᵀ curvature seen by g=Jᵀr) while keeping the individual
+    norms ‖gᵀM_r g‖, gᵀJJᵀg ≲ κ× the tanh-shaped spline's. A DESIGNED high-curvature activation (grok-PDF reasoning:
+    ratio↑ ⇒ PS↑ ⇒ alignment↑ ⇒ better generalization). Contrast with SplineMlpModel, whose ψ is LEARNED — here ψ is
+    a FIXED buffer (NOT in θ), so only the weights train and the tuned ratio persists. tune() must be called (with the
+    data) after init_theta before use — build_model/run_stream do this."""
+    def __init__(self, inDim, width, depth, outDim, useBias, nc=50, srange=5.0, kappa=1.5):
+        super().__init__()
+        self.nc = int(nc); self.srange = float(srange); self.kappa = float(kappa)
+        self.useBias = (useBias == "1" or useBias is True or useBias == 1)
+        dims = [int(inDim)] + [int(width)] * int(depth) + [int(outDim)]
+        self.nlayers = len(dims) - 1
+        for l in range(self.nlayers):                                  # ONLY weights/biases are trainable (ψ is fixed)
+            din, dout = dims[l], dims[l + 1]
+            self._add(f"w{l}", (din, dout), fan_in=din, init="n")
+            if self.useBias: self._add(f"b{l}", (dout,), init="0")
+        self.in_shape = (int(inDim),); self.oc = int(outDim)
+        self._knots = torch.linspace(-self.srange, self.srange, self.nc, dtype=DTYPE, device=_dev())
+        self.psi = torch.tanh(self._knots).detach()                    # fixed shape (tanh-like until tune() overwrites)
+        self.tune_gain = 1.0
+
+    def _net(self, p, X):
+        a = X.reshape(X.shape[0], -1)
+        for l in range(self.nlayers):
+            z = a @ p[f"w{l}"]
+            if self.useBias: z = z + p[f"b{l}"]
+            a = _spline_act(z, self.psi, self.srange) if l < self.nlayers - 1 else z
+        return a
+
+    def tune(self, th, X, Y, N, outD, gsteps=80, glr=0.01):
+        """FINE-TUNE the spline control points ψ ON THE FLY each run — NOT a hardcoded/predefined activation. Two stages:
+        (1) a cheap grid WARM-START over cup shapes {x·sin(βx), x·tanh(βx), √(x²+c)−√c} (high, consistently-signed φ″ but
+        low φ′ ⇒ big 2nd/1st-order ratio), then (2) GRADIENT ASCENT on the ratio |gᵀM_r g|/gᵀJJᵀg — Adam directly on the
+        nc control points ψ via explicit double-backward — with a soft penalty keeping both norms ≤ κ× tanh's. The final
+        ψ is a genuinely optimized shape (typically ≫ the best grid shape). Falls back to the grid ψ if the grad stage
+        misbehaves. Re-run each time (grok-⑧ tunes on its own train set), so the activation adapts to the data/model."""
+        M = N * outD; kn = self._knots; th = th.detach()
+
+        def norms_ng(psi):                                                           # no-grad metrics (for the grid + norm bounds)
+            self.psi = psi.detach()
+            o = self.forward(th, X); rr = (-N * _TL.loss.resid_cotangent(o, Y, N)).reshape(-1)
+            r = rr[:M]; rc = r.reshape(N, outD); g = self.vjp(th, X, rc)[0]
+            fp = self.forward(th + EPS * g, X); fm = self.forward(th - EPS * g, X)
+            Jg = ((fp - fm) / (2.0 * EPS)).reshape(-1)[:M]
+            return abs(float(g @ hvpS(th, X, g, rc))), float((Jg ** 2).sum())
+        mrg0, jjg0 = norms_ng(torch.tanh(kn)); r0 = mrg0 / (jjg0 + 1e-30)
+
+        cands = [torch.tanh(kn)] + [kn * torch.sin(b * kn) for b in (1., 2., 3., 4.)] \
+                + [kn * torch.tanh(b * kn) for b in (.5, 1., 2., 3.)] + [torch.sqrt(kn * kn + c) - c ** .5 for c in (.05, .2, .5, 1.)]
+        best_psi, best_r = torch.tanh(kn), r0
+        for psi in cands:
+            mrg, jjg = norms_ng(psi); rr_ = mrg / (jjg + 1e-30)
+            if mrg <= self.kappa * mrg0 and jjg <= self.kappa * jjg0 and rr_ > best_r: best_psi, best_r = psi, rr_
+
+        try:                                                                         # gradient refinement of ψ (differentiable ratio)
+            def ratio_norms(psi):
+                self.psi = psi
+                thl = th.clone().requires_grad_(True)
+                o = self._net(self._unflatten(thl), X).reshape(-1)[:M]
+                rr = (-N * _TL.loss.resid_cotangent(o.reshape(N, outD), Y, N)).reshape(-1)[:M]; r = rr.detach()
+                g, = torch.autograd.grad((o * r).sum(), thl, create_graph=True)                    # g = Jᵀr
+                Mg, = torch.autograd.grad((g * g.detach()).sum(), thl, create_graph=True)          # M_r g
+                gMrg = (g * Mg).sum()
+                v = torch.zeros_like(o, requires_grad=True)
+                Jtv, = torch.autograd.grad(o, thl, grad_outputs=v, create_graph=True)              # Jᵀv
+                Jg, = torch.autograd.grad(Jtv, v, grad_outputs=g, create_graph=True)               # Jg
+                return gMrg, (Jg * Jg).sum()
+            psi = best_psi.detach().clone().requires_grad_(True)
+            opt = torch.optim.Adam([psi], lr=glr)
+            gb_psi, gb_r = best_psi.detach().clone(), best_r
+            for _ in range(int(gsteps)):
+                opt.zero_grad()
+                gMrg, gJJg = ratio_norms(psi)
+                ratio = gMrg.abs() / (gJJg + 1e-20)
+                pen = torch.relu(gMrg.abs() / mrg0 - self.kappa) ** 2 + torch.relu(gJJg / jjg0 - self.kappa) ** 2
+                (-ratio + 5.0 * pen).backward()
+                if psi.grad is not None and torch.isfinite(psi.grad).all(): opt.step()
+                with torch.no_grad():
+                    rv = float(gMrg.abs() / (gJJg + 1e-20))
+                    if float(gMrg.abs()) <= self.kappa * mrg0 and float(gJJg) <= self.kappa * jjg0 and rv > gb_r:
+                        gb_psi, gb_r = psi.detach().clone(), rv
+            best_psi, best_r = gb_psi, gb_r
+        except Exception:
+            pass
+
+        self.psi = best_psi.detach(); self.tune_gain = float(best_r / (r0 + 1e-30)); self.tune_shape = "grad-tuned ψ"
+        return self.tune_gain
+
+
 # ===================== model factory =====================
 def build_model(arch, inDim, outDim, P):
-    if arch == "mlp":
+    if arch == "mlp" and P.get("act") == "bsplinetuned":
+        m = TunedSplineMlpModel(inDim, P["width"], P["depth"], outDim, P["bias"] == "1",
+                                nc=int(P.get("splinenc", 50)), srange=float(P.get("splinerange", 5.0)),
+                                kappa=float(P.get("bsplinekappa", 2.5)))   # fixed ratio-tuned spline (tune() called after data is ready)
+    elif arch == "mlp" and P.get("act") == "bspline":
+        m = SplineMlpModel(inDim, P["width"], P["depth"], outDim, P["bias"] == "1",
+                           nc=int(P.get("splinenc", 50)), srange=float(P.get("splinerange", 5.0)))   # learnable KAN-style spline MLP
+    elif arch == "mlp":
         spec, p = build_spec(inDim, P["width"], P["depth"], P["act"], P["bias"] == "1", outDim)
         m = MlpModel(spec, p, (inDim,), outDim)
     elif arch == "cnn":
@@ -3377,6 +3818,8 @@ def build_model(arch, inDim, outDim, P):
         m = GptLMModel(inDim, outDim, P) if P.get("dataset") == "owt" else GptModel(inDim, outDim, P)
     elif arch == "diaglin":
         m = DiagLinModel(inDim, outDim, P)             # diagonal linear network (β=u⊙v) — Alternating Gradient Flows
+    elif arch == "lsa":
+        m = LsaModel(inDim, outDim, P)                 # 1-layer linear self-attention for in-context regression (use with dataset=iclreg)
     else:
         raise ValueError(f"unknown arch '{arch}'")
     m.init_scheme = P.get("initscheme", "default")     # weight-init scheme (default/mup/xavier_*/custom)
@@ -3425,6 +3868,20 @@ def init_data_theta(P, dataset, N, inD, outD):
         X, Y = load_saddle(N, inD, outD, P.get("saddlesep", 0.4), P["seed"], inStd)   # saddle-to-saddle linear regression (diagonal teacher, separated σ)
     elif dataset == "agf":
         X, Y = load_agf(N, inD, P.get("agfratio", 0.6), P["seed"], inStd)   # alternating gradient flows: scalar y=β*·x, β*_i=ratio^i (use with arch=diaglin)
+    elif dataset == "iclreg":
+        # IN-CONTEXT LINEAR REGRESSION sequences (arXiv:2501.16265): each sample is a prompt Z=[[x₁..x_N x_q];[y₁..y_N 0]]
+        # ∈ ℝ^{(D+1)×(N+1)}, task w~N(0,I_D), x~N(0,inStd²·I_D), yᵢ=w·xᵢ; target = y_q=w·x_q. Use with arch=lsa + SMALL
+        # init to see saddle-to-saddle. D=indim, N(context)=seqlen. Vectorized on the GPU RNG.
+        D = max(1, int(P.get("indim", 8))); Nc = max(1, int(P.get("seqlen", 16)))
+        g = torch.Generator(device=_dev()); g.manual_seed(u32(int(P["seed"]) * 7919 + 13))
+        W = torch.randn(N, D, generator=g, device=_dev(), dtype=DTYPE)                    # (N, D)   per-sequence task
+        Xs = inStd * torch.randn(N, D, Nc, generator=g, device=_dev(), dtype=DTYPE)       # (N, D, N) context inputs
+        Ys = torch.einsum("nd,ndk->nk", W, Xs)                                            # (N, N)   yᵢ = w·xᵢ
+        Xq = inStd * torch.randn(N, D, generator=g, device=_dev(), dtype=DTYPE)           # (N, D)   query input
+        Yq = torch.einsum("nd,nd->n", W, Xq)                                              # (N,)     y_q = w·x_q
+        Z = torch.zeros(N, D + 1, Nc + 1, dtype=DTYPE, device=_dev())
+        Z[:, :D, :Nc] = Xs; Z[:, D, :Nc] = Ys; Z[:, :D, Nc] = Xq                          # last col y-slot stays 0
+        X = Z.reshape(N, -1); Y = Yq.view(N, 1)
     elif dataset == "const":
         # iid Gaussian inputs (like synthetic); every target is the CONSTANT POSITIVE |tgt| PLUS optional Gaussian
         # noise of VARIANCE `cvar` (default 0 ⇒ exactly constant). cvar=0 ⇒ all initial residuals r=y−f(x,θ₀) share
@@ -3629,7 +4086,450 @@ def _selfstab_payload(th, X, Y, p, opt, N, outD, Jc, rr, kss, mlan, seed):
     return {"top": top, "bot": bot, "p3": p3, "p4": p4, "tvals": [float(x) for x in tvals], "k": kss, "approx": ss_approx}
 
 
+# ===================== page-1 intervention experiments (★grok-⑤⑥⑦⑧) =====================
+# Each is a ONE-SHOT live sweep over an intervention axis (init scale / output scale / optimizer-λ / activation).
+# For every intervention value we train a SHORT run from a common seed and record the causal chain the PDF posits:
+#   ratio = |gᵀM_r g| / |gᵀJJᵀg|   (g=Jᵀr)   ·   PS = λ_max(∇²L)   ·   J↔r align = |u₁(NTK)ᵀr|/‖r‖
+# plus a train-vs-HELD-OUT generalization signal (loss + accuracy) so faster-grokking is directly visible.
+# The MAIN GD run is never touched — these build their own thetas/models internally.
+
+def _grok_heldout(dataset, Nte, inD, outD, seed, P):
+    """A fresh held-out test set for the SAME task (deterministic label ⇒ new inputs = valid test).
+    Returns (Xte, Yte) or (None, None) if the dataset has no clean generator."""
+    s = int(seed) + 987654                                        # disjoint seed family from train
+    try:
+        if dataset == "maxfind":  return load_maxfind(Nte, inD, s)
+        if dataset == "modadd":   return load_modadd(Nte, outD, s)
+        if dataset == "ksparse":  return load_ksparse(Nte, inD, P.get("ksparse", 3), s)
+        if dataset == "cifar10":  return load_cifar(Nte, s)
+        if dataset == "mnist":    return load_mnist(Nte, s)
+    except Exception:
+        return None, None
+    return None, None
+
+
+def _grok_diag(th, X, Y, Xte, Yte, N, Nte, outD, ce, psm=20):
+    """Per-checkpoint diagnostics for the intervention sweeps (uses the CURRENT _TL.model/_TL.loss, evolving Q).
+    Returns {ltr,lte,atr,ate,ps,align,ratio}. acc is None for regression (MSE)."""
+    prevq = getattr(_TL, "qcfg", None); _TL.qcfg = None           # evolving M_r for these diagnostics
+    try:
+        p = _TL.model.p; M = N * outD
+        o = _TL.model.forward(th, X)
+        ltr = float(_TL.loss.value(o, Y, N))
+        atr = ate = None; lte = None
+        if Xte is not None:
+            ote = _TL.model.forward(th, Xte)
+            lte = float(_TL.loss.value(ote, Yte, Nte))
+        # accuracy for CE *and* MSE: multi-output (one-hot / softmax) ⇒ argmax match; scalar ±1 ⇒ sign match.
+        # (For continuous scalar regression the sign-accuracy is still defined; grokking tasks here are ±1 / class.)
+        def _acc(out, tgt):
+            # BALANCED accuracy = mean over classes of that class's recall. On IMBALANCED-label data a random
+            # (constant-prediction) model scores the MAJORITY fraction under raw accuracy (e.g. ~0.85-0.97 for
+            # near-constant-sign targets), which hides learning; balanced accuracy starts at ~1/C (chance) for ANY
+            # imbalance and rises only as the model genuinely separates the classes. Equals raw accuracy when balanced.
+            if out.dim() >= 2 and out.shape[-1] > 1:
+                pred = out.argmax(-1); true = tgt.argmax(-1)
+                recs = [float((pred[m] == c).float().mean()) for c in true.unique().tolist() for m in [(true == c)] if m.any()]
+                return float(sum(recs) / len(recs)) if recs else 0.0
+            ps = torch.sign(out).reshape(-1); ts = torch.sign(tgt).reshape(-1)
+            recs = [float((ps[m] == s).float().mean()) for s in (1.0, -1.0) for m in [(ts == s)] if m.any()]
+            return float(sum(recs) / len(recs)) if recs else 0.0
+        atr = _acc(o, Y)
+        if Xte is not None: ate = _acc(ote, Yte)
+        # residual / Jacobian geometry (mirrors run_stream's generic residual rr = onehot−softmax / Y−f)
+        rr = (-N * _TL.loss.resid_cotangent(o, Y, N)).reshape(-1)
+        r = rr[:M]; rc = r.reshape(N, outD); rn = float(r.norm()) + 1e-30
+        if isinstance(_TL.model, MlpModel):
+            # MLP: jac_cols is ONE batched backward (fast + EXACT even at large M) ⇒ use it.
+            Jm = jac_cols(th, X)[0][:M]
+            g = Jm.t() @ r                                        # Jᵀr
+            gJJg = float((Jm @ g).pow(2).sum())                  # ‖J g‖²
+            u1 = r / rn                                           # top NTK eigvec via power iteration on Jm(Jmᵀ·)
+            for _ in range(30):
+                u1 = Jm @ (Jm.t() @ u1); nu = float(u1.norm())
+                if nu < 1e-30: break
+                u1 = u1 / nu
+        else:
+            # non-MLP (transformer): jac_cols is an M-way vjp loop ⇒ prohibitive. MATRIX-FREE instead —
+            # g=Jᵀr via ONE vjp; J·v via central-difference jvp (2 forwards); NTK top-eigvec via v↦J(Jᵀv).
+            g = _TL.model.vjp(th, X, rc)[0]                       # Jᵀr (p,)
+            def _jvp(v):
+                fp = _TL.model.forward(th + EPS * v, X); fm = _TL.model.forward(th - EPS * v, X)
+                return ((fp - fm) / (2.0 * EPS)).reshape(-1)[:M]  # J·v (M,)
+            gJJg = float((_jvp(g) ** 2).sum())
+            u1 = r / rn
+            for _ in range(30):
+                w = _TL.model.vjp(th, X, u1.reshape(N, outD))[0]
+                u1 = _jvp(w); nu = float(u1.norm())
+                if nu < 1e-30: break
+                u1 = u1 / nu
+        _gMrgS = float(g @ hvpS(th, X, g, rc))                   # gᵀM_r g  (SIGNED Rayleigh quotient of M_r=Σr_kQ_k along g=Jᵀr)
+        gMrg = abs(_gMrgS)                                       # |gᵀM_r g|
+        ratio = gMrg / (gJJg + 1e-30)
+        mrgn = _gMrgS - gJJg                                     # gᵀM_r g − gᵀJJᵀg (signed; gᵀJJᵀg=‖Jg‖²≥0) — net 2nd-order vs 1st-order curvature seen by g
+        align = abs(float(u1 @ r)) / rn                          # |u₁(NTK)ᵀr|/‖r‖
+        ps = float(lanczos_extreme_vals(lambda v: hvpL(th, X, Y, v), p, 1, min(p, psm), 0x5EED1)[0][0])
+        # ---- Panel 3: residual r projected onto PAIRS of NTK eigenvectors (u₂u₃, u₄u₅, u₆u₇, u₈u₉) ----
+        #   ‖P_span(u_i,u_{i+1}) r‖/‖r‖ (u_i orthonormal ⇒ = √((u_iᵀr)²+(u_{i+1}ᵀr)²)/‖r‖). Top-9 NTK eigvecs via a
+        #   matrix-free Lanczos on the M-dim NTK operator v↦J(Jᵀv) (works for MLP & transformer alike).
+        jr23 = jr45 = jr67 = jr89 = None
+        try:
+            _ntkop = (lambda v: Jm @ (Jm.t() @ v)) if isinstance(_TL.model, MlpModel) \
+                     else (lambda v: _jvp(_TL.model.vjp(th, X, v.reshape(N, outD))[0]))
+            _K9 = min(9, M); _mlan9 = min(M, max(24, 3 * _K9))
+            Qb9, T9, k9 = _lanczos_core(_ntkop, M, _mlan9, 0, dt=DTYPE, q0=_randvec16(M, 0x51A9).to(dtype=DTYPE, device=_dev()))
+            mu9, Sv9 = _safe_eigh(T9); ord9 = torch.argsort(mu9, descending=True); Qm9 = torch.stack(Qb9)
+            U9 = [Sv9[:, int(ord9[i])].to(device=_dev(), dtype=DTYPE) @ Qm9 for i in range(min(_K9, k9))]   # u₁..u_k (M-dim)
+            def _pair(i):                                                    # 1-indexed: energy of r in span(u_i, u_{i+1})
+                if i + 1 > len(U9): return None
+                a = float(U9[i - 1] @ r); b = float(U9[i] @ r); return (a * a + b * b) ** 0.5 / rn
+            jr23, jr45, jr67, jr89 = _pair(2), _pair(4), _pair(6), _pair(8)
+        except Exception:
+            pass
+        return {"ltr": ltr, "lte": lte, "atr": atr, "ate": ate, "ps": ps, "align": align, "ratio": ratio, "mrgn": mrgn,
+                "jr23": jr23, "jr45": jr45, "jr67": jr67, "jr89": jr89}
+    finally:
+        _TL.qcfg = prevq
+
+
+def _rs_step(X, Y, N, outD, lr, K, refresh, ntry, thr, seed0=0x9EA9, mode="top"):
+    """★grok-⑨ step: GRADIENTS ARE USED ONLY to pick the K-dim search subspace U (recomputed every `refresh` steps).
+    Within that frozen subspace the update is pure RANDOM SEARCH: sample `ntry` random directions (±), keep the one
+    that (a) DECREASES the loss and (b) makes Δf ALIGN with the residual r=Y−f (⟨Δf,r⟩/‖·‖ > thr, i.e. f moves toward
+    the targets), step there. No gradient descent is ever taken. `mode` selects the subspace — IDENTICAL protocol,
+    only U differs, so the three are apples-to-apples baselines:
+        'top'    = top-K eigvecs of M_r=Σ_k r_kQ_k by |λ| (the main run — dominant residual-curvature directions)
+        'bottom' = bottom-K eigvecs of M_r by |λ| (the FLATTEST / least-curvature directions)
+        'rand'   = a fresh RANDOM K-dim orthonormal subspace (no curvature info at all)."""
+    M = N * outD; state = {"U": None, "cnt": 0}; gen = torch.Generator(device=_dev())
+    def step(th):
+        p = _TL.model.p
+        if state["U"] is None or (state["cnt"] % refresh == 0):
+            if mode == "rand":                                                   # baseline: random K-dim subspace (no M_r, no Lanczos)
+                gsub = torch.Generator(device=_dev()); gsub.manual_seed((seed0 ^ 0x5A5A5A ^ (state["cnt"] * 2654435761)) & 0x7FFFFFFF)
+                kk = min(K, p); Uq, _ = torch.linalg.qr(torch.randn(p, kk, generator=gsub, dtype=DTYPE, device=_dev()))
+                state["U"] = Uq
+            else:                                                                # 'top' / 'bottom': eigvecs of M_r=Σ_k r_kQ_k by |λ|
+                o = _TL.model.forward(th, X); r = (-N * _TL.loss.resid_cotangent(o, Y, N)).reshape(-1)[:M]; rc = r.reshape(N, outD)
+                Qb, T, k = _lanczos_core(lambda v: hvpS(th, X, v, rc), p, min(p, max(48, 8 * K)), 0, dt=DTYPE, q0=_randvec16(p, SEC21_SEED))
+                mu, Sv = _safe_eigh(T); order = torch.argsort(mu.abs(), descending=(mode != "bottom")); Qm = torch.stack(Qb)   # top=largest|λ|, bottom=smallest|λ|
+                kk = min(K, len(order)); V = torch.stack([Sv[:, int(order[i])].to(device=_dev(), dtype=DTYPE) @ Qm for i in range(kk)])
+                Uq, _ = torch.linalg.qr(V.t()); state["U"] = Uq                  # p×kk orthonormal search basis
+        state["cnt"] += 1; U = state["U"]; kk = U.shape[1]
+        o0 = _TL.model.forward(th, X); L0 = float(_TL.loss.value(o0, Y, N))
+        r0 = (-N * _TL.loss.resid_cotangent(o0, Y, N)).reshape(-1); nr0 = float(r0.norm()) + 1e-30
+        gen.manual_seed((seed0 + state["cnt"]) & 0x7FFFFFFF); best = None
+        for _ in range(ntry):
+            c = torch.randn(kk, generator=gen, dtype=DTYPE, device=_dev()); d = U @ c; d = d / (float(d.norm()) + 1e-30)
+            for sgn in (1.0, -1.0):
+                thp = th + sgn * lr * d; op = _TL.model.forward(thp, X); Lp = float(_TL.loss.value(op, Y, N))
+                df = (op - o0).reshape(-1); al = float(df @ r0) / ((float(df.norm()) + 1e-30) * nr0)
+                if Lp < L0 and al > thr and (best is None or Lp < best[1]): best = (thp, Lp)
+        return best[0] if best is not None else th
+    return step
+
+
+def _gw10_step(X, Y, N, outD, lr, K, ntry, mode, seed0=0x10B9):
+    """★grok-⑩ step: NO GRADIENT is EVER used for the update. Autograd (2nd-order HVP) is used ONLY to build the
+    K-dim search subspace U of Qr=M_r=Σ_i r_iQ_i, and U is RECOMPUTED EVERY iteration:
+        'top'  = top-K eigvecs by SIGNED λ (largest)     'bottom' = bottom-K by SIGNED λ (most negative)
+        'null' = K eigvecs of smallest |λ| (near-null)   'rand'   = fresh random K-dim orthonormal (NO Qr at all)
+    Then PURE RANDOM SEARCH inside U: sample `ntry` random unit directions (±), candidate θ'=θ+η·d̂, and STEP to the
+    one MAXIMIZING rᵀf(θ') with the residual r=Y−f FROZEN at the current θ (no gradient, no loss accept/reject).
+    η is the grok lr."""
+    M = N * outD; gen = torch.Generator(device=_dev()); cnt = {"c": 0}
+    def step(th):
+        p = _TL.model.p
+        if mode == "rand":                                                       # random K-dim subspace (no Qr, no autograd)
+            gs = torch.Generator(device=_dev()); gs.manual_seed((seed0 ^ 0x777 ^ (cnt["c"] * 2654435761)) & 0x7FFFFFFF)
+            kk = min(K, p); U, _ = torch.linalg.qr(torch.randn(p, kk, generator=gs, dtype=DTYPE, device=_dev()))
+        else:                                                                    # top/bottom/null: eigvecs of Qr=Σ_i r_iQ_i (matrix-free HVP)
+            o = _TL.model.forward(th, X); r = (-N * _TL.loss.resid_cotangent(o, Y, N)).reshape(-1)[:M]; rc = r.reshape(N, outD)
+            Qb, T, k = _lanczos_core(lambda v: hvpS(th, X, v, rc), p, min(p, max(64, 10 * K)), 0, dt=DTYPE, q0=_randvec16(p, SEC21_SEED))
+            mu, Sv = _safe_eigh(T); Qm = torch.stack(Qb)
+            if mode == "top":      order = torch.argsort(mu, descending=True)     # largest signed λ
+            elif mode == "bottom": order = torch.argsort(mu, descending=False)    # most negative signed λ
+            else:                  order = torch.argsort(mu.abs(), descending=False)  # 'null' = smallest |λ|
+            kk = min(K, len(order)); V = torch.stack([Sv[:, int(order[i])].to(device=_dev(), dtype=DTYPE) @ Qm for i in range(kk)])
+            U, _ = torch.linalg.qr(V.t())
+        cnt["c"] += 1; kk = U.shape[1]
+        o0 = _TL.model.forward(th, X); r0 = (-N * _TL.loss.resid_cotangent(o0, Y, N)).reshape(-1)[:M]   # r=Y−f FROZEN at θ
+        gen.manual_seed((seed0 + cnt["c"]) & 0x7FFFFFFF); best = None
+        for _ in range(ntry):
+            c = torch.randn(kk, generator=gen, dtype=DTYPE, device=_dev()); d = U @ c; d = d / (float(d.norm()) + 1e-30)
+            for sgn in (1.0, -1.0):
+                thp = th + sgn * lr * d; fp = _TL.model.forward(thp, X).reshape(-1)[:M]
+                obj = float(r0 @ fp)                                             # rᵀf(θ') with r frozen ⇒ maximize
+                if best is None or obj > best[1]: best = (thp, obj)
+        return best[0] if best is not None else th
+    return step
+
+
+def _gw10_diag(th, X, Y, Xte, Yte, N, Nte, outD):
+    """grok-⑩ diagnostics (measurement only — no gradient enters the trajectory): train/test loss + balanced acc,
+    and |cos(r, v_i)| for the top-4 NTK (=JJᵀ) eigenvectors v_i (NTK recomputed here, per run, per iteration)."""
+    p = _TL.model.p; M = N * outD
+    o = _TL.model.forward(th, X); ltr = float(_TL.loss.value(o, Y, N)); lte = None; ate = None; ote = None
+    if Xte is not None:
+        ote = _TL.model.forward(th, Xte); lte = float(_TL.loss.value(ote, Yte, Nte))
+    def _acc(out, tgt):
+        if out.dim() >= 2 and out.shape[-1] > 1:
+            pred = out.argmax(-1); true = tgt.argmax(-1)
+            recs = [float((pred[m] == c).float().mean()) for c in true.unique().tolist() for m in [(true == c)] if m.any()]
+            return float(sum(recs) / len(recs)) if recs else 0.0
+        ps = torch.sign(out).reshape(-1); ts = torch.sign(tgt).reshape(-1)
+        recs = [float((ps[m] == s).float().mean()) for s in (1.0, -1.0) for m in [(ts == s)] if m.any()]
+        return float(sum(recs) / len(recs)) if recs else 0.0
+    atr = _acc(o, Y)
+    if ote is not None: ate = _acc(ote, Yte)
+    rr = (-N * _TL.loss.resid_cotangent(o, Y, N)).reshape(-1); r = rr[:M]; rn = float(r.norm()) + 1e-30
+    al = [None, None, None, None]
+    try:
+        if isinstance(_TL.model, MlpModel):
+            Jm = jac_cols(th, X)[0][:M]; _ntkop = lambda v: Jm @ (Jm.t() @ v)
+        else:
+            def _jvp(v):
+                fp = _TL.model.forward(th + EPS * v, X); fm = _TL.model.forward(th - EPS * v, X)
+                return ((fp - fm) / (2.0 * EPS)).reshape(-1)[:M]
+            _ntkop = lambda v: _jvp(_TL.model.vjp(th, X, v.reshape(N, outD))[0])
+        _K = min(4, M); _mlan = min(M, max(24, 6 * _K))
+        Qb, T, k = _lanczos_core(_ntkop, M, _mlan, 0, dt=DTYPE, q0=_randvec16(M, 0x51A9).to(dtype=DTYPE, device=_dev()))
+        mu, Sv = _safe_eigh(T); ordv = torch.argsort(mu, descending=True); Qm = torch.stack(Qb)
+        for i in range(min(_K, k)):
+            vi = Sv[:, int(ordv[i])].to(device=_dev(), dtype=DTYPE) @ Qm
+            al[i] = abs(float(vi @ r)) / (rn * (float(vi.norm()) + 1e-30))
+    except Exception:
+        pass
+    return {"ltr": ltr, "lte": lte, "atr": atr, "ate": ate, "al1": al[0], "al2": al[1], "al3": al[2], "al4": al[3]}
+
+
+def _gw10_train_iter(th0, X, Y, Xte, Yte, steps, ev, N, Nte, outD, step_fn):
+    """GENERATOR form of _gw10_train: yields the growing `rec` after each diagnostic tick ⇒ the caller can stream
+    partial curves LIVE. The last yielded rec is complete."""
+    th = th0.clone(); rec = {kk: [] for kk in ("it", "ltr", "lte", "atr", "ate", "al1", "al2", "al3", "al4")}
+    for t in range(steps + 1):
+        if t % ev == 0 or t == steps:
+            try: d = _gw10_diag(th, X, Y, Xte, Yte, N, Nte, outD)
+            except Exception: break
+            rec["it"].append(t)
+            for kk in ("ltr", "lte", "atr", "ate", "al1", "al2", "al3", "al4"): rec[kk].append(d[kk])
+            yield rec
+        if t < steps:
+            nth = step_fn(th)
+            if not torch.isfinite(nth).all(): break
+            th = nth
+
+
+def _gw10_train(th0, X, Y, Xte, Yte, steps, ev, N, Nte, outD, step_fn):
+    """Short random-search trajectory for grok-⑩ (non-streaming: exhaust the iterator, return the final rec)."""
+    rec = {kk: [] for kk in ("it", "ltr", "lte", "atr", "ate", "al1", "al2", "al3", "al4")}
+    for rec in _gw10_train_iter(th0, X, Y, Xte, Yte, steps, ev, N, Nte, outD, step_fn): pass
+    return rec
+
+
+def _stream_runs(gens, build, which, min_emit_dt=0.0):
+    """Drive per-run trajectory GENERATORS in LOCKSTEP (advance every run by one diagnostic tick per round) and
+    `yield` a partial SSE payload after each round, so grok-⑤–⑩ plot LIVE as their curves grow. `build(recs)` maps
+    the current list of per-run rec dicts → the g_gwN payload. Returns the final list of recs (via StopIteration.value
+    of the `yield from`). Runs that finish early keep their last rec; others keep advancing."""
+    n = len(gens); recs = [None] * n; active = list(range(n))
+    while active:
+        nxt = []
+        for i in active:
+            try: recs[i] = next(gens[i])
+            except StopIteration: continue                       # run i done ⇒ recs[i] holds its final rec
+            nxt.append(i)
+        yield {"type": "gwstream", "which": which, "payload": build(recs)}
+        active = nxt
+    return recs
+
+
+def _grok_train(th0, X, Y, Xte, Yte, steps, ev, N, Nte, outD, ce, step_fn, yscale_fn=None, lr=None,
+                batch=0, bseed=0, mk_step=None):
+    """Run a SHORT training (step_fn advances one optimizer step) recording _grok_diag every `ev` steps.
+    yscale_fn(t) -> scalar multiplier on the TARGETS (train + test) at step t: used by ⑥ output-scaling
+    (the intervention scales the target labels Y, not the model) — plain GD on the scaled targets.
+    MINIBATCH (grok knob `batch`): when 0 < batch < N the per-step UPDATE is taken on a fresh minibatch
+    (RandomState(bseed·1000003+t)), while _grok_diag (loss/acc/ratio/PS/align) always measures on the FULL
+    train set so the recorded curves stay comparable across batch sizes. The minibatch step is rebuilt each
+    step via `mk_step(Xb,Yb,Nb)` (so optimizer-λ / GD interventions re-derive their operators on the batch);
+    if mk_step is None (e.g. ⑨ random-search, which needs the stable full objective) the full-batch step_fn
+    is used unchanged. batch<=0 or batch>=N ⇒ ordinary full-batch (identical to before).
+    Returns {it,ltr,lte,atr,ate,ps,align,ratio, grokIt} where grokIt = first it with test-acc>0.7 (or None)."""
+    rec = {k: [] for k in ("it", "ltr", "lte", "atr", "ate", "ps", "align", "ratio", "mrgn", "jr23", "jr45", "jr67", "jr89")}
+    for rec in _grok_train_iter(th0, X, Y, Xte, Yte, steps, ev, N, Nte, outD, ce, step_fn, yscale_fn, lr, batch, bseed, mk_step): pass
+    return rec
+
+
+def _grok_train_iter(th0, X, Y, Xte, Yte, steps, ev, N, Nte, outD, ce, step_fn, yscale_fn=None, lr=None,
+                     batch=0, bseed=0, mk_step=None):
+    """GENERATOR form of _grok_train: yields the growing `rec` after each diagnostic tick so grok-⑤–⑨ can stream
+    LIVE. Same semantics as _grok_train otherwise; the last yielded rec (with grokIt) is complete."""
+    import numpy as _np
+    th = th0.clone(); rec = {k: [] for k in ("it", "ltr", "lte", "atr", "ate", "ps", "align", "ratio", "mrgn", "jr23", "jr45", "jr67", "jr89")}
+    grokIt = None; Y0 = Y; Yte0 = Yte; rec["grokIt"] = None
+    use_mb = bool(batch) and 0 < int(batch) < N
+    bs = int(batch)
+    def _mb_idx(t):
+        idx = _np.random.RandomState((int(bseed) * 1000003 + t) & 0x7FFFFFFF).choice(N, size=bs, replace=False)
+        return torch.as_tensor(idx, dtype=torch.long, device=X.device)
+    for t in range(steps + 1):
+        s = 1.0 if yscale_fn is None else float(yscale_fn(t))
+        Yt = Y0 if yscale_fn is None else (s * Y0)
+        Ytet = Yte0 if (yscale_fn is None or Yte0 is None) else (s * Yte0)
+        if t % ev == 0 or t == steps:
+            try:
+                d = _grok_diag(th, X, Yt, Xte, Ytet, N, Nte, outD, ce)   # DIAGNOSTICS: always full train set
+            except Exception:
+                break
+            rec["it"].append(t)
+            for k in ("ltr", "lte", "atr", "ate", "ps", "align", "ratio", "mrgn", "jr23", "jr45", "jr67", "jr89"): rec[k].append(d[k])
+            if grokIt is None and d["ate"] is not None and d["ate"] > 0.7: grokIt = t
+            rec["grokIt"] = grokIt
+            yield rec
+        if t < steps:
+            if use_mb and not (yscale_fn is None and mk_step is None):   # minibatch UPDATE (full-batch diag above)
+                ii = _mb_idx(t); Xb = X[ii]
+                if yscale_fn is not None:                               # ⑥ output-scaling: GD on the scaled minibatch targets
+                    nth = th - lr * _opt_dir(_TL.model, gradL(th, Xb, s * Y0[ii])[0], "gd")
+                else:                                                   # ⑤⑦⑧: rebuild the optimizer step on the minibatch
+                    nth = mk_step(Xb, Y0[ii], bs)(th)
+            else:
+                nth = (th - lr * _opt_dir(_TL.model, gradL(th, X, Yt)[0], "gd")) if yscale_fn is not None else step_fn(th)
+            if not torch.isfinite(nth).all(): break               # diverged ⇒ stop this run early
+            th = nth
+
+
+def _gd_step(X, Y, lr):
+    return lambda th: th - lr * _opt_dir(_TL.model, gradL(th, X, Y)[0], "gd")
+
+
+def _opt_step_star(X, Y, N, outD, lr, lam, sign):
+    """★ update: θ ← θ − η∇L ± ηλ(∇LᵀM_r∇L/‖∇L‖²)∇L  (rescales the GD step by the residual-curvature Rayleigh quotient)."""
+    M = N * outD
+    def step(th):
+        gL = gradL(th, X, Y)[0]
+        o = _TL.model.forward(th, X); rc = (-N * _TL.loss.resid_cotangent(o, Y, N)).reshape(-1)[:M].reshape(N, outD)
+        c = float(gL @ hvpS(th, X, gL, rc)) / (float(gL.norm()) ** 2 + 1e-30)   # ∇LᵀM_r∇L / ‖∇L‖²
+        return th - lr * gL + sign * lr * lam * c * gL
+    return step
+
+
+def _opt_step_taylor(X, Y, N, outD, lr, lam1, lam2):
+    """η² Taylor update: θ ← θ − η∇L + η²λ₂(M̄_r ∇L) − η²λ₁(Ḡ ∇L). λ₁=λ₂=0 ⇒ EXACTLY plain GD baseline.
+    This is the FAITHFUL second-order reading of the PDF's θ−ηg+η²λ₂M_rg−η²λ₁JᵀJg, with the LITERAL η²
+    prefactor. The crux is the operator SCALE: M̄_r = (1/N)Σ_k r_k Q_k and Ḡ = (1/N)JᵀJ are the PER-SAMPLE
+    (÷N) operators — the SAME scale as §1's sharpness / the Gauss-Newton edge, i.e. the scale on which 2/η
+    (the Edge of Stability) lives. At that scale η² is dimensionally correct and STABLE: near EoS ‖Ḡ∇L‖≈(2/η)‖∇L‖
+    so the JᵀJ correction is ≈2λ× the GD step (large where curvature is large, vanishing where it is small — the
+    intended behaviour), and no run blows up. (Applying η² to the raw SUM operators M_r=Σr_kQ_k, JᵀJ on g=Jᵀr —
+    an O(N²)-larger scale — is what NaN'd every λ>0 run and left a single visible curve; that was a bug, not this.)
+    ∇L is the mean-loss gradient (the GD direction); rc=Y−f is the per-sample residual weighting M_r."""
+    M = N * outD
+    def step(th):
+        o = _TL.model.forward(th, X); rr = (-N * _TL.loss.resid_cotangent(o, Y, N)).reshape(-1)
+        Jc, _ = jac_cols(th, X); Jm = Jc[:M]; rc = rr[:M].reshape(N, outD)     # rc = Y−f (per-sample residual for M_r=Σr_kQ_k)
+        gL = gradL(th, X, Y)[0]                                                 # ∇L (mean-loss gradient)
+        Mbar_gL = hvpS(th, X, gL, rc) / N                                       # M̄_r ∇L = (1/N)Σ_k r_k Q_k · ∇L  (per-sample)
+        Gbar_gL = (Jm.t() @ (Jm @ gL)) / N                                      # Ḡ ∇L   = (1/N) JᵀJ · ∇L         (per-sample, = NTK scale)
+        return th - lr * gL + (lr * lr) * lam2 * Mbar_gL - (lr * lr) * lam1 * Gbar_gL
+    return step
+
+
+def _opt_step_sched(X, Y, N, outD, lr0, safety, rule, lam1, lam2, xval, sign):
+    """★grok-⑦ NEGATIVE-λ lr SCHEDULE (anti-self-stabilization). Progressive sharpening runs fastest at λ<0, so σ=λmax(∇²L)
+    blows up and the Edge-of-Stability SELF-STABILIZATION would kick in (oscillation caps σ at 2/η). To SEE the pure blowup
+    we hold σ JUST BELOW the edge: η_t = min(η₀, safety·2/σ_t) with safety<1. Rationale:
+      • η_t·σ_t = safety·2 < 2 ⇒ the top eigen-mode's GD factor |1−η·σ|=|1−2·safety|<1 ⇒ STABLE ⇒ no self-stabilization.
+      • η_t = η₀ while σ is small (σ < safety·2/η₀), so the schedule is INACTIVE until σ actually nears the edge — it
+        "kicks in only on blowup", exactly as asked.
+      • Once active, η shrinks only as 1/σ (as SLOWLY as possible while staying sub-edge) ⇒ never over-aggressive, so
+        learning keeps going. `safety` (→1) trades stability margin for larger η / faster learning.
+    σ_t is a warm-started power iteration on the loss Hessian ∇²L (few HVPs/step). Applies to BOTH rules (taylor/star)."""
+    p = _TL.model.p; st = {"u": _randvec16(p, 0x5EED1).to(dtype=DTYPE, device=_dev())}
+    def _sigma(th):
+        u = st["u"]
+        for _ in range(8):                                    # warm-started power iteration → λmax(∇²L) (persisted across steps)
+            v = hvpL(th, X, Y, u); nv = float(v.norm())
+            if not (nv == nv) or nv < 1e-30: return 0.0
+            u = v / nv
+        st["u"] = u
+        return abs(float(u @ hvpL(th, X, Y, u)))
+    def _apply(th, eta):
+        return _opt_step_taylor(X, Y, N, outD, eta, lam1, lam2)(th) if rule == "taylor" else _opt_step_star(X, Y, N, outD, eta, xval, sign)(th)
+    def step(th):
+        if st.get("Lref") is None:                               # FIXED reference: the loss at the run's start
+            st["Lref"] = float(_TL.loss.value(_TL.model.forward(th, X), Y, N))
+        s = _sigma(th)
+        eta = min(lr0, safety * 2.0 / s) if s > 1e-9 else lr0     # HOLD σ·η = safety·2 < 2 once σ nears the edge; else η₀
+        L0 = float(_TL.loss.value(_TL.model.forward(th, X), Y, N))
+        ceil = 3.0 * max(st["Lref"], L0, 1e-9)                    # cap vs a FIXED reference (not the previous step) ⇒ NO compounding blowup
+        thp = _apply(th, eta)
+        for _ in range(9):                                       # ANTI-BLOWUP backtrack: halve η until the step lands (finite &
+            if torch.isfinite(thp).all():                        #   loss ≤ 3× the run's starting loss). Since the ceiling is FIXED,
+                Lp = float(_TL.loss.value(_TL.model.forward(thp, X), Y, N))   # the loss can't compound step-over-step ⇒ the run stays
+                if Lp == Lp and Lp <= ceil: return thp                       # bounded (sharpening still shows; loss just can't explode).
+            eta *= 0.5; thp = _apply(th, eta)
+        return thp if torch.isfinite(thp).all() else th          # last resort: don't advance into NaN
+    return step
+
+
+def _tune_gauss_init(model, X, Y, N, outD, seed=0, floor_frac=0.02, lr=0.1, stab=1.7):
+    """★grok-⑤ tuned-init baseline: treat the weight init as iid Gaussian θ ~ N(μ, σ²) and GRID-SEARCH (μ, σ) to
+    MAXIMIZE the ratio |gᵀM_r g| / gᵀJJᵀg (g=Jᵀr) — subject to TWO constraints so the run is both non-degenerate AND
+    STABLE (the previous version maximized the ratio alone and the winner blew up in training):
+      1. gᵀJJᵀg ≥ floor_frac × its grid-max        — denominator doesn't collapse (no degenerate tiny-init).
+      2. σ_H(θ)·lr ≤ stab  (< 2, the Edge of Stability) — the init's loss-Hessian sharpness σ_H = λmax(∇²L) is small
+         enough that GD from it does NOT diverge at the run's learning rate. This is what prevents the blowup.
+    Among candidates meeting BOTH we take the max ratio; if none meet #2 we take the LEAST-sharp among the #1-valid
+    set (best-effort stability). Returns (μ*, σ*, θ*, ratio*, gJJg*, σ_H*). One fwd + vjp/jvp + one M_r-HVP + a short
+    power-iteration on ∇²L (sharpness) per candidate."""
+    p = model.p; M = N * outD
+    is_mlp = isinstance(model, MlpModel)
+
+    def _sharp(th):                                                                              # σ_H = λmax(∇²L) via power iteration on the FULL loss Hessian
+        u = _randvec16(p, 0x5EED1).to(dtype=DTYPE, device=_dev())
+        for _ in range(10):
+            v = hvpL(th, X, Y, u); nv = float(v.norm())
+            if not (nv == nv) or nv < 1e-30: return 0.0
+            u = v / nv
+        return abs(float(u @ hvpL(th, X, Y, u)))
+
+    def metrics(mu, sigma):
+        gg = torch.Generator(device=_dev()); gg.manual_seed((int(seed) ^ int(mu * 1e5) ^ (int(sigma * 1e5) << 1)) & 0x7FFFFFFF)
+        th = (mu + sigma * torch.randn(p, generator=gg, dtype=DTYPE, device=_dev())).detach()
+        o = model.forward(th, X); rr = (-N * _TL.loss.resid_cotangent(o, Y, N)).reshape(-1)
+        r = rr[:M]; rc = r.reshape(N, outD)
+        if is_mlp:
+            Jm = jac_cols(th, X)[0][:M]; g = Jm.t() @ r; gJJg = float((Jm @ g).pow(2).sum())    # g=Jᵀr, gᵀJJᵀg=‖Jg‖²
+        else:
+            g = model.vjp(th, X, rc)[0]
+            fp = model.forward(th + EPS * g, X); fm = model.forward(th - EPS * g, X)
+            Jg = ((fp - fm) / (2.0 * EPS)).reshape(-1)[:M]; gJJg = float((Jg ** 2).sum())
+        gMrg = abs(float(g @ hvpS(th, X, g, rc)))                                                # |gᵀM_r g|
+        sh = _sharp(th)                                                                          # σ_H = λmax(∇²L) at this init
+        return th, gMrg, gJJg, sh
+
+    cands = []
+    for mu in (-0.3, -0.1, 0.0, 0.1, 0.3):
+        for sigma in (0.05, 0.1, 0.2, 0.35, 0.5, 0.8, 1.2):
+            try: cands.append((mu, sigma) + metrics(mu, sigma))                                  # (mu,sigma,th,gMrg,gJJg,sharp)
+            except Exception: pass
+    if not cands: return 0.0, 0.2, None, 0.0, 0.0, 0.0                 # (defensive; never hit in practice)
+    floor = floor_frac * max(c[4] for c in cands)                                                # keep gᵀJJᵀg ≳ 2% of its grid-max
+    valid = [c for c in cands if c[4] >= floor] or cands
+    stable = [c for c in valid if c[5] * lr <= stab]                                             # σ_H·lr ≤ stab (< 2) ⇒ stable at the run's lr
+    if stable:
+        best = max(stable, key=lambda c: c[3] / (c[4] + 1e-30))                                  # highest ratio AMONG the stable inits
+    else:
+        best = min(valid, key=lambda c: c[5])                                                    # none stable ⇒ least-sharp (safest) fallback
+    mu, sigma, th, mrg, jjg, sh = best
+    return mu, sigma, th, mrg / (jjg + 1e-30), jjg, sh
+
+
 # ===================== streaming run =====================
+_GW2_RESUME = {}   # ★grok-②: device → (gw2_count, gw2_prev_below) so the CUMULATIVE switch count survives pause→resume
+
 def run_stream(P):
     """Yield SSE message dicts: one 'meta', then ('step' [+ 'slq']) per eig-tick, then 'done'."""
     dataset = P.get("dataset", "synthetic")
@@ -3658,6 +4558,9 @@ def run_stream(P):
         inDimE, outDimE = max(2, int(P["indim"])), 1          # two iid-Gaussian samples (norm/angle controlled) → scalar ±1
     elif dataset == "agf":
         inDimE, outDimE = int(P["indim"]), 1                  # alternating gradient flows: scalar linear regression y=β*·x
+    elif dataset == "iclreg":
+        inDimE = (int(P["indim"]) + 1) * (int(P["seqlen"]) + 1)   # ICL prompt Z ∈ ℝ^{(D+1)×(N+1)} flattened (D=indim, N=seqlen)
+        outDimE = 1                                           # scalar query prediction ŷ_q
     else:
         inDimE, outDimE = P["indim"], P["outdim"]
     _TL.model = build_model(arch, inDimE, outDimE, P)
@@ -3691,6 +4594,52 @@ def run_stream(P):
     s32 = P.get("s32", 0)                # §24: A=JJᵀr & B=(η/2N)JrᵀQ_kJr alignment with residual + top-4 NTK eigvecs (time-series)
     s33 = P.get("s33", 0)                # §25: ‖∇L‖, ‖M_r∇L‖, ‖JᵀJ∇L‖, |⟨∇‖J‖²,Q∇L⟩|, |⟨∇‖J‖²,G∇L⟩| evolution (single plot)
     s34 = P.get("s34", 0)                # §26: direction-drift |cos(v_i(t),v_i(t−k))| of the top-3 GN/NTK & top-3⊕bottom-3 M_r eigenvectors
+    gw2 = int(P.get("gw2", 0))           # ★grok-② direction-change: |cos(u_{k,t},u_{k,t−k'})| for k'∈{1,2,5}, k=1,2,3 (top-3 Q_r=M_r eigvecs) + running count of |cos(t,t−1)|<τ crossings (how many times the model switched that direction)
+    gw2tau = float(P.get("gw2tau", 0.7)) # ★grok-② threshold τ on |cos(t,t−1)|: a downward crossing below τ = one direction switch
+    gw3 = int(P.get("gw3", 0))           # ★grok-③ ALL §6 residual↔spectrum-alignment panels (NTK + M_r + Gauss-Newton, 3 panels × 4 bar plots) computed under {evolving, init-fixed, random, random-low-rank} Q — multi-select overlay in the widget — + a per-mode SLQ M_r spectrum (|λ| log-log)
+    gw3rank = max(1, int(P.get("gw3rank", 4)))   # ★grok-③ rank r of the random-low-rank Q
+    gw3k = max(2, int(P.get("gw3k", 20)))         # ★grok-③ top-K (NTK/GN) & top-K⊕bottom-K (M_r) eigen-count for the §6 bars
+    gw3full = int(P.get("gw3full", 0))   # ★grok-③ low-rank build: 0 = TRUE top-r eigenvalues + random eigvecs (matched spectrum), 1 = random eigvals too (Frobenius-matched)
+    gw4 = int(P.get("gw4", 0))           # ★grok-④ curvature-subspace persistence: freeze the top-k ⊕ bottom-k eigvecs of M_r at reference iters T₀; over training count how many of the CURRENT top-k / bottom-k lie IN the span of that frozen reference (proj-energy>thr) vs OUT — 4 lines/plot, one plot per T₀
+    gw4K = max(1, int(P.get("gw4K", 15)))         # ★grok-④ k = # of top (and # of bottom) M_r directions
+    gw4thr = float(P.get("gw4thr", 0.5))         # ★grok-④ span-membership threshold on projection energy ‖P_ref v‖² ∈ [0,1]
+    gw4t0s = [int(x) for x in str(P.get("gw4t0s", "0,25,50,100")).split(",") if x.strip() != ""][:6] or [0, 25, 50, 100]   # ★grok-④ reference iterations T₀
+    gw4tau = float(P.get("gw4tau", 0.1))         # (legacy; unused by the new grok-④ definition)
+    gw1 = int(P.get("gw1", 0))           # ★grok-① init-scale SWEEP (one-shot at t=0): for each σ (θ=σ·θ₀, log grid) a point — x=|uᵢᵀr|/‖r‖ (i=1,2,3, top NTK eigvecs), y=Δ‖J‖_F over gw1steps GD steps, colour=|gᵀM_rg|−|gᵀJᵀJg| with g=Jᵀr
+    gw1n = max(4, int(P.get("gw1n", 100)))        # ★grok-① # of σ points
+    gw1steps = max(1, int(P.get("gw1steps", 4)))  # ★grok-① # GD steps for Δ‖J‖_F
+    # ---- page-1 INTERVENTION experiments (one-shot live sweeps): ⑤ init-scale, ⑥ output-scale, ⑦ optimizer-λ, ⑧ activation ----
+    gw5 = int(P.get("gw5", 0))                   # ★grok-⑤ Initialization: sweep init scale σ; decreasing σ ⇒ ratio↑ PS↑ align↑ ⇒ faster grokking
+    gw5layer = P.get("gw5layer", "all")          # ★grok-⑤ scale the WHOLE model ("all") or only the LAST layer ("last")
+    gw6 = int(P.get("gw6", 0))                   # ★grok-⑥ Output scaling: sweep output gain α (scale last-layer output)
+    gw6mode = P.get("gw6mode", "init")           # ★grok-⑥ apply α once at init ("init") or ramp every gw_int steps ("interval")
+    gw7 = int(P.get("gw7", 0))                   # ★grok-⑦ Optimization: sweep λ in a modified update that up-weights |gᵀM_rg|
+    gw7rule = P.get("gw7rule", "star")         # ★grok-⑦ DEFAULT "taylor" = θ−η∇L+η²λ₂M̄_r∇L−η²λ₁Ḡ∇L (per-sample ops) ; "star" = θ−η∇L±ηλ(∇LᵀM_r∇L/‖∇L‖²)∇L
+    gw7sign = 1 if str(P.get("gw7sign", "plus")) in ("plus", "1", "+") else -1   # ★grok-⑦ ± sign for the star rule
+    gw7schedsafety = min(0.999, max(0.1, float(P.get("gw7schedsafety", 0.9))))   # ★grok-⑦ NEGATIVE-λ anti-self-stab lr schedule: hold σ·η = safety·2 (<2) below EoS (→1 = larger η/less margin)
+    gw8 = int(P.get("gw8", 0))                   # ★grok-⑧ Architecture: sweep activation relu→gelu→tanh→sine→bspline (complexity ladder)
+    gw9 = int(P.get("gw9", 0))                   # ★grok-⑨ random-search on the span of the top M_r directions (gradients only pick the search subspace; descent is random search with Δf↔Δr alignment)
+    gw9K = max(1, int(P.get("gw9K", 8)))         # ★grok-⑨ subspace dim = # top M_r eigenvectors to search within
+    gw9refresh = max(1, int(P.get("gw9refresh", 20)))   # ★grok-⑨ # random-search steps between recomputing the top M_r directions
+    gw9try = max(1, int(P.get("gw9try", 8)))     # ★grok-⑨ # random directions sampled per step
+    gw9thr = float(P.get("gw9thr", 0.0))         # ★grok-⑨ min Δf↔residual alignment to accept a step
+    # ★grok init-scale controls — small init ⇒ clearer dynamics. Interventions ⑥⑦⑧⑨ start each run from gwNinit·θ₀
+    # (⑤ sweeps init itself, untouched). Diagnostics ②③④ analyze a SHADOW small-init trajectory (gwdiaginit·θ₀,
+    # plain GD) instead of the main run; gwdiaginit=1 ⇒ the main run (original behaviour).
+    gw6init = float(P.get("gw6init", 1.0)); gw7init = float(P.get("gw7init", 1.0))
+    gw8init = float(P.get("gw8init", 1.0)); gw9init = float(P.get("gw9init", 1.0))
+    gw10 = int(P.get("gw10", 0))                 # ★grok-⑩ subspace-traversal random-search: top/bottom/null/random-K dirs of Qr, step maximizes rᵀf (no gradient) — for k∈{1,3,5}
+    gw10try = max(1, int(P.get("gw10try", 16)))  # ★grok-⑩ # random directions sampled per step within the K-dim subspace
+    gw10init = float(P.get("gw10init", 1.0))     # ★grok-⑩ init-scale θ=gw10init·θ₀ (default 1 = main run's init)
+    gwdiaginit = float(P.get("gwdiaginit", 1.0))                     # 1 ⇒ grok runs use the MAIN run's init (default; tie to main run)
+    gw_n = max(3, int(P.get("gw_n", 6)))         # shared: # of sweep points (⑤⑥⑦)
+    gw_steps = max(10, int(P.get("gw_steps", 500)))   # shared: # GD steps per short run
+    gw_ev = max(1, int(P.get("gw_ev", 20)))      # shared: diagnostic stride within a short run
+    gw_batch = max(0, int(P.get("gw_batch", 0)))   # ★grok-⑤–⑨ minibatch size for the intervention UPDATE (0 = full batch); diagnostics stay full-batch. ⑨'s random-search run stays full-batch (needs the stable objective).
+    # grok-⑤–⑨ use their OWN train/test sets (memorization-vs-generalization needs many samples) — decoupled from
+    # the main widget's small nsamp (bounded by M=n·d≤grid3dcap for the other panels).
+    gw_nsamp = max(8, int(P.get("gw_nsamp", 500)))   # ★grok-⑤–⑨ TRAINING-set size (high by default)
+    gw_nte = max(8, int(P.get("gw_nte", 200)))   # ★grok-⑤–⑨ held-out TEST/validation-set size (high by default)
     s35 = P.get("s35", 0)                # §27: sliding-window 3D subspace projection of the six ∇θ gradient-vectors (50-step lag)
     s40 = P.get("s40", 0)                # §28: TIMESCALES — relative rates of change along the flow θ̇=−∇L: panel 1 (J/r) + panel 2 (Q-Hessian analogs)
     s36 = P.get("s36", 0)                # prediction-3: linear residual theory r_{t+1}=(I−η̃JJᵀ)r_t after the ‖J·ṙ‖−‖J̇·r‖ sign-change (prediction widget)
@@ -3711,8 +4660,8 @@ def run_stream(P):
     edsangk = max(1, int(P.get("edsangk", 10)))  # early-dynamics plots 2-5: dimension of the top-K (by |λ|) eigenspace used for the mean principal angle (default 10)
     ss = P.get("ss", 0)                  # SELF-STABILIZATION panel (NOT a prediction; off by default): cos(∇S, ±k eigvecs of H_P) + 2 projected-gradient cosines
     ssk = max(1, min(10, int(P.get("ssk", 5))))  # self-stabilization: # of top/bottom eigenvectors of the preconditioned Hessian H_P (default 5)
-    qspec = P.get("qspec", 0)            # Q-SPECTRUM panel (NOT a prediction; off by default): per-iteration eigenspectra of Q_r=Σ_k r_kQ_k and H=Σ_k Q_k (scree + scrubber)
-    qspeck = max(2, min(80, int(P.get("qspeck", 40))))  # Q-spectrum: # of top ⊕ bottom eigenvalues of Q_r / H per iteration (default 40)
+    qspec = P.get("qspec", 0)            # Q-SPECTRUM panel (NOT a prediction; off by default): eigenspectra of Q_r=Σ_k r_kQ_k and H=Σ_k Q_k over training (scree + scrubber). MLP (p≤20000) ⇒ FULL spectrum; else top⊕bottom-qspeck.
+    qspeck = max(2, min(80, int(P.get("qspeck", 40))))  # Q-spectrum FALLBACK only (non-MLP / p>20000): # of top ⊕ bottom eigenvalues to sample when the full p×p spectrum can't be materialized
     s38 = P.get("s38", 0)                # prediction-5: trace-statistic prediction Tr(NTK) (quad/cubic × live/self, ±PSD) vs Tr(∇²L) & Tr(JᵀJ) (prediction widget)
     p5t0 = max(0, int(P.get("p5t0", 10)))   # prediction-5: iteration t0 at which Q, residual & J are frozen for the trace propagation
     stat_init = max(0, int(P.get("stat_init", 0)))   # prediction 5.1/5.2: iteration AFTER which the theoretical forecasts begin (0 = from the start)
@@ -3748,6 +4697,8 @@ def run_stream(P):
     lr = P["lr"]
     opt = P.get("optimizer", "gd")
     s39 = int(P.get("s39", 0))                          # Prediction-6 (Adaptive Optimizers): 4 parallel trajectories, top-50 Gauss-Newton eigenvalues each (scree curve)
+    s6f = int(P.get("s6f", 0))                           # §6 FIXED-BASIS panel (off by default): §6 phases along the INIT eigenbasis of M_r & GN, with a FROZEN ranking (init eigenvalues). Shows how each fixed direction is learned.
+    s6fk = max(2, min(60, int(P.get("s6fk", 16))))      # §6-fixed-basis: # of top init-directions tracked per operator
     lr6 = {"gd": float(P.get("lr_gd", 0.1)), "sign": float(P.get("lr_sign", 0.001)),
            "spectral": float(P.get("lr_muon", 0.01)), "gaussnewton": float(P.get("lr_gn", 0.01))}   # per-optimizer LR for prediction-6
     p6 = None                                           # lazy-seeded {optimizer: θ} for the 4 prediction-6 trajectories (all from the run's init θ0)
@@ -3759,18 +4710,50 @@ def run_stream(P):
     ce = _TL.loss.name == "ce"
     yield {"type": "meta", "p": p, "n": n, "kth": kth, "nResid": nResid, "thr": thr,
            "n7": n7, "n8": n8, "multi": multi, "multi_ok": multi_ok, "loss": _TL.loss.name, "arch": arch, "dataset": dataset,
+           "gridM": int(M), "gridcap": int(grid3dcap),   # ★grok-①②③④ diagnostics (+ §19–§27) need M=N·d_out ≤ grid3dcap; client shows a note when gated
            "device": f"{_dev()} · {str(DTYPE).replace('torch.', '')}"}
 
     # ---- data + init (shared helper): synthetic = mulberry32 (browser-identical); cifar/sorting = real data ----
     th, X, Y, pos_rows, neg_rows = init_data_theta(P, dataset, Nfull, inD, outD)
+    if isinstance(_TL.model, TunedSplineMlpModel):          # ratio-tune the fixed spline shape now that data/residual exist
+        try: _TL.model.tune(th, X, Y, Nfull, outDimE)
+        except Exception: pass
+    _th_init0 = th.detach().clone()    # the fresh seeded init θ₀ (grok interventions ⑤–⑨ scale THIS, not the trained θ)
+    # Held-out TEST set for the §1 loss plot (train vs test overlay ⇒ generalization / grokking visible on the core plot).
+    # Same generator, disjoint seed (+987654, mirrors the grok interventions); test loss is one forward per §1 tick.
+    # Skipped for owt (a language model has no comparable scalar held-out loss here — Y are token ids).
+    # chebyshev/chebyshev2 use a FIXED linspace(-1,1,N) grid that ignores the seed, so a same-N held-out set would be
+    # IDENTICAL to train (test loss ≡ train loss). Use a different-sized grid ⇒ a genuine OFF-GRID interpolation
+    # test set (measures generalization to unseen x). (anglepair = 2 fixed points has no possible held-out set ⇒ test≡train.)
+    Xtest = Ytest = None; Ntest = 0
+    if dataset != "owt":
+        try:
+            _Pte = dict(P); _Pte["seed"] = (int(P["seed"]) + 987654) & 0x7FFFFFFF
+            _Nte = (Nfull + max(3, Nfull // 3)) if dataset in ("chebyshev", "chebyshev2") else Nfull
+            _, Xtest, Ytest, _, _ = init_data_theta(_Pte, dataset, _Nte, inD, outD); Ntest = int(Xtest.shape[0])
+        except Exception:
+            Xtest = Ytest = None; Ntest = 0
+    _qcfg = _qcfg_setup(P, th, X, M)   # qinit toggle: evolve (default) | fix@θ_t | gauss/bern/unif random Q
+    if _qcfg["mode"] != "evolve" or _qcfg["note"]:   # provenance: record the Q-init mode (non-default runs only)
+        # Sections that reach Q via torch.func and do NOT yet honour qinit (§15/§22/§23/§25-cosines) — warn if enabled
+        # so a non-evolve capture can never SILENTLY show true Q in one panel while the trackers use fix/random Q.
+        _unhooked = [nm for nm, on in (("§15", s23), ("§22", s30), ("§23", s31), ("§25-cos", s33)) if on]
+        _uwarn = (" WARNING: sections " + ",".join(_unhooked) + " use an unhooked torch.func Q and still show the "
+                  "TRUE Q (not the qinit override) — Pred-3/4/5.1/6, §12, §19/§20/§25, qspec and the sS density DO honour it.") if _unhooked else ""
+        yield {"type": "qinit", "mode": _qcfg["mode"], "fixt": _qcfg["fixt"],
+               "seed": _qcfg["seed"], "note": (_qcfg["note"] or "") + _uwarn or None}
     Xpool, Ypool, poolPos, poolNeg = X, Y, pos_rows, neg_rows   # full pool; minibatch sampled per-step below
 
     mF = min(p, max(2 * nSub + 24, 44))
     mV = min(p, max(2 * n + 16, 28))
     mSLQ = min(p, 40)
     steps = P["steps"]
+    gw3specevery = int(P.get("gw3specevery", 0)) or max(1, steps // 40)   # ★grok-③ SLQ-spectrum throttle (~40 snapshots); needs `steps`
+    qspecevery = int(P.get("qspecevery", 0)) or max(1, steps // 60)   # Q-spectrum throttle: compute the (heavy) full spectrum every Nth step (0/unset ⇒ auto ≈60 snapshots). t==0 and t==steps always included.
+    s6fevery = int(P.get("s6fevery", 0)) or max(1, steps // 80)       # §6-fixed-basis throttle (~80 snapshots); t==0 (the FREEZE tick) and t==steps always included.
     ee = P["eigevery"]
     nProbe = max(1, P["slqprobes"])
+    slqBlock = max(1, int(P.get("slqblock", 4)))   # SLQ block size: DEFAULT 4 = BLOCK SLQ (validated sweet spot — best density accuracy per matvec vs exact eig; 1 = standard single-vector SLQ)
     efrac = min(1.0, max(0.5, P["energyp"] / 100.0))
     slqStride = max(1, round(max(1, P.get("slqevery", 10)) / ee))   # SLQ density every slqevery iterations (default 10; eigTick stride = slqevery/eigevery)
     heavyevery = max(1, P.get("heavyevery", 4))   # §7-proj + §8 compute every heavyevery-th tick (responsiveness)
@@ -3792,10 +4775,27 @@ def run_stream(P):
     sec13_qjprev = None        # §13 panel 4: previous eig-tick's {QJ=(N_j,N_i,p) Q_iJ_j, r} for the ‖A−B‖/‖A‖ asymmetry
     sec15_hist = []            # §15: rolling buffer of the last 2 eig-ticks' {th, J, r} (need t−1 and t−2)
     sec6_prev_Jrn = None; sec6_Jf2hist = []; sec6_prev_lam3 = None   # §6 phases-of-learning: prev ‖Jᵀr‖ (for Δ‖Jᵀr‖) + last-2 ‖J‖²_F (for ½ d²‖J‖²_F/dt²) + prev top-3 NTK eigvals (for Δλ_i)
+    s6f_Umr = None; s6f_Ugn = None; s6f_lam0 = None; s6f_gn0 = None  # §6-FIXED-BASIS: frozen INIT eigvecs (K×p) of M_r & GN + their init eigenvalues (the frozen ranking); set once at the first tick
     sec25_hist = []            # §25: rolling buffer of the last 2 ticks' {th, J, r} for the II/III tr-NTK 2nd-diff terms (need t−1,t−2)
     sec25_rhist = []           # §25: rolling buffer of the last 101 ticks' {t, r} for cos(r_t, r_{t−k}), k∈{1,10,30,50,100} (residual-direction drift)
     sec25_r0hist = []          # §25: the INITIAL residual r_0 (persistent, 1 entry) for the cos(r_t, r_0) cumulative-rotation reference line
     sec26_hist = []            # §26: rolling buffer of the last 101 ticks' {t, gn/ntk/mrTop/mrBot eigvecs} for the eigenvector-direction drift
+    gw2_hist = []              # ★grok-②: rolling buffer of the last ~6 ticks' {t, mrTop:[u1,u2,u3]} (continued) for cos-drift at lags {1,2,5}
+    # ★grok-②: per-k × per-lag running # of |cos|<τ switches (CUMULATIVE). PERSIST across pause→resume — a resume calls
+    # run_stream afresh with start>0, and re-zeroing here made the cumulative count DROP to 0 at the resume point.
+    _gw2key = str(_dev())
+    if start > 0 and _gw2key in _GW2_RESUME:
+        gw2_count, gw2_prev_below = _GW2_RESUME[_gw2key]                    # continue the counter from the paused run
+    else:
+        gw2_count = [[0, 0, 0], [0, 0, 0], [0, 0, 0]]                       # lags in DIAGNOSTIC-TICK units ⇒ works at any eig-every
+        gw2_prev_below = [[False, False, False], [False, False, False], [False, False, False]]  # edge-detect: count only the tick it FIRST drops below τ
+        _GW2_RESUME[_gw2key] = (gw2_count, gw2_prev_below)                  # store the REFS — in-place +=1 updates propagate for a later resume
+    gw3_th0 = None; gw3_Qrand = None        # ★grok-③: frozen init θ₀ (for init-fixed Q & the random-Q freeze point) + the dense random Q (built once)
+    gw4_refs = {}                           # ★grok-④: T₀ -> {"top":U_top(k×p orthonormal), "bot":U_bot(k×p), "cap":actual capture step} frozen M_r reference subspaces
+    gw4h_refs = {}                          # ★grok-④ (H version): same, but for the UNWEIGHTED function Hessian H=Σ_i Q_i
+    gwdiag_th = None                        # ★grok-②③④: small-init SHADOW trajectory (gwdiaginit·θ₀, plain GD) the diagnostics analyze (gwdiaginit=1 ⇒ main run)
+    gw1_done = False                        # ★grok-①: one-shot init-scale sweep guard
+    gw5_done = gw6_done = gw7_done = gw8_done = gw9_done = gw10_done = False   # ★grok-⑤⑥⑦⑧⑨⑩: one-shot intervention-sweep guards
     eds_hist = []              # EARLY-DYNAMICS (s42): rolling buffer of the last ~11 ticks' {t, h, mr} top-K eigenspaces, for the mean principal angle at lags {1,2,5,10}
     sec27_state = None         # §27: _Sec27State (rolling 101 vector-sets + sign refs), created lazily on the first §27 step
     sec27_prev = None          # §27: previous step's {r, J} for the discrete ṙ/J̇ gradient vectors
@@ -3973,6 +4973,8 @@ def run_stream(P):
                 dtype=torch.long, device=_dev())
             X, Y = Xpool[sel], Ypool[sel]
             pos_rows = neg_rows = torch.empty(0, dtype=torch.long, device=_dev())
+        if _qcfg["mode"] != "evolve" and _qcfg["theta_t"] is None and t >= _qcfg["fixt"]:
+            _qcfg_snapshot(th, X)   # qinit fix/random with t>0: freeze Q at θ_t once the trajectory reaches t
         if t == start:
             t0 = time.time()  # reset rate clock once streaming begins (exclude fast-forward)
         if t >= start and t % ee == 0:
@@ -3982,6 +4984,14 @@ def run_stream(P):
                 yield {"type": "error",
                        "error": f"diverged at step {t} (loss={loss:.2e}). Lower lr or init_scale."}
                 return
+            # held-out test loss for the §1 loss overlay — ONE forward, computed strictly when the §1 dashboard is on
+            testloss = None
+            if (s1 or s2 or s3) and Xtest is not None:
+                try:
+                    _tl = float(_TL.loss.value(_TL.model.forward(th, Xtest), Ytest, Ntest))
+                    testloss = _tl if math.isfinite(_tl) else None
+                except Exception:
+                    testloss = None
             # CE, and the OWT language model under ANY loss, have no scalar per-output residual y−f
             # (Y are token ids and out is (N,T,V)); the §1 residual trace / §4d sign-groups are empty.
             r = None if (ce or dataset == "owt") else (Y - out).reshape(-1)
@@ -4051,7 +5061,7 @@ def run_stream(P):
 
             # ---- multi-sample sections: shared Jacobian columns Jc (M, p), residual rr (M,) ----
             Jc = rr = None
-            if ((multi_ok or s12single) and (s7 or s8 or s9 or s10 or s11 or s12 or s13 or s15 or s16 or s17 or s18 or s19 or s20 or s21 or s22 or s26 or s27 or s28 or s29 or s32 or s33 or s34 or s35 or s36 or s37 or s38 or s40 or s41 or s42)) or ((s23 or s27 or s28 or s29 or s32 or s33 or s34 or s35 or s36 or s37 or s38 or s40 or s41 or s42) and N <= grid3dcap):   # §15/§19/§20/§21/§24/§25/§26/§27/pred-3/4/5/4.2(ray)/early-dynamics also run for a single sample
+            if ((multi_ok or s12single) and (s7 or s8 or s9 or s10 or s11 or s12 or s13 or s15 or s16 or s17 or s18 or s19 or s20 or s21 or s22 or s26 or s27 or s28 or s29 or s32 or s33 or s34 or s35 or s36 or s37 or s38 or s40 or s41 or s42)) or ((s23 or s27 or s28 or s29 or s32 or s33 or s34 or s35 or s36 or s37 or s38 or s40 or s41 or s42) and N <= grid3dcap) or ((gw1 or gw2 or gw3 or gw4) and (N * outD) <= grid3dcap):   # §15/§19/§20/§21/§24/§25/§26/§27/pred-3/4/5/4.2(ray)/early-dynamics + ★grok-①②③④ diagnostics also run for a single sample (compute Jc iff a consumer panel is ON)
                 Jc, out_flat = jac_cols(th, X)
                 rr = (-N * _TL.loss.resid_cotangent(out, Y, N)).reshape(-1)   # generic residual: Y−f (MSE), onehot−softmax (CE)
 
@@ -4204,6 +5214,41 @@ def run_stream(P):
                            "ntk": _ph["ntk"], "gn": _ph["gn"] * N, "dbal": _ph["dbal"],   # gn emitted as N·‖∇L‖
                            "d2Jf2": _d2, "trdiff": _ph["trdiff"] * (lr / N)}   # scale the trace-difference by η/N (η=lr)
 
+            # §6 FIXED-BASIS (s6f) — the §6 phases plotted against a RANKING FROZEN AT INITIALIZATION. At the first
+            #   tick we eigendecompose M_r=Σ_k r_kQ_k and the Gauss-Newton G=JᵀJ and FREEZE their top-s6fk eigvecs
+            #   {u_i} (ordered by their INIT eigenvalue). Every snapshot we then read, for each FIXED u_i:
+            #     curvature  c_i(t) = u_iᵀ M_r(θ_t) u_i   (M_r)   /   ‖J(θ_t)u_i‖²   (GN)   — how that direction sharpens
+            #     alignment  a_i(t) = |⟨Jᵀr(θ_t), u_i⟩| / ‖Jᵀr(θ_t)‖                        — §6 Phase-1 on the fixed dir
+            #   Because the ranking never re-sorts, x=rank i always means the SAME direction, so you can read how each
+            #   individual init-direction is learned (grows / shrinks / re-aligns) over training. Off by default.
+            g_s6fix = None
+            if s6f and (t % s6fevery == 0 or t == steps) and _TL.loss.name in ("mse", "ce") and (N * outD) <= grid3dcap and dataset != "owt" and Jc is not None and rr is not None:
+                try:
+                    Jm6 = Jc[:M]; rm6 = rr[:M]; rc6 = rm6.reshape(N, outD)
+                    Jtr6 = Jm6.t() @ rm6; nJtr6 = float(Jtr6.norm()) + 1e-30
+                    if s6f_Umr is None:                                                  # FREEZE the init eigenbases (first tick only)
+                        _mrp = _eds_eigpairs(th, X, rc6, p, s6fk, Jm6.dtype)             # top-s6fk ⊕ bottom-s6fk M_r eigenpairs (init)
+                        _mrp = sorted(_mrp, key=lambda lv: -lv[0])[:s6fk]                # keep the top-s6fk by signed eigenvalue (descending)
+                        s6f_Umr = torch.stack([v for (_l, v) in _mrp]); s6f_lam0 = [float(_l) for (_l, _v) in _mrp]
+                        _Kc, _Vc = sym_eig_desc(Jm6 @ Jm6.t())                           # NTK=JJᵀ eigenpairs (M-dim), descending — GN eigvecs are Jᵀ·(NTK eigvec)
+                        _kk = min(s6fk, int(_Vc.shape[1])); _Ugn = []; _gn0 = []
+                        for _i in range(_kk):
+                            _ui = Jm6.t() @ _Vc[:, _i]; _nu = float(_ui.norm())
+                            _Ugn.append(_ui / (_nu + 1e-30)); _gn0.append(float(_Kc[_i]))
+                        s6f_Ugn = torch.stack(_Ugn); s6f_gn0 = _gn0
+                    mr_curv = []; mr_al = []
+                    for _i in range(int(s6f_Umr.shape[0])):
+                        _ui = s6f_Umr[_i]; _Mru = hvpS(th, X, _ui, rc6) / N              # M_r(θ_t)·u_i (one HVP with the CURRENT residual)
+                        mr_curv.append(float(_ui @ _Mru)); mr_al.append(abs(float(_ui @ Jtr6)) / nJtr6)
+                    gn_curv = []; gn_al = []
+                    for _i in range(int(s6f_Ugn.shape[0])):
+                        _ui = s6f_Ugn[_i]; _Jui = Jm6 @ _ui                              # J(θ_t)·u_i ; ‖·‖² = GN curvature along the fixed dir
+                        gn_curv.append(float(_Jui @ _Jui)); gn_al.append(abs(float(_ui @ Jtr6)) / nJtr6)
+                    g_s6fix = {"t": t, "k": int(s6f_Umr.shape[0]), "mr_curv": mr_curv, "gn_curv": gn_curv,
+                               "mr_align": mr_al, "gn_align": gn_al, "mr_lam0": s6f_lam0, "gn_lam0": s6f_gn0}
+                except Exception:
+                    g_s6fix = None
+
             # §26: eigenvector-direction drift — |cos(v_i(t),v_i(t−k))|, k∈{10,20,30,50,100}, for the top-3 GN & NTK
             #       eigenvectors and the top-3 ⊕ bottom-3 M_r=Σr_kQ_k eigenvectors (12 eigvecs; 4 panels × 3 plots × 5 lags)
             g26 = None
@@ -4215,6 +5260,538 @@ def run_stream(P):
                 sec26_hist.append({"t": t, **{key: [v.detach().clone() for v in ev26[key]] for key in ev26}})
                 if len(sec26_hist) > 101:                                # hold ≥100 ticks back for the lag-100 line
                     sec26_hist.pop(0)
+
+            # ★grok-②③④ small-init SHADOW: analyze a gwdiaginit·θ₀ trajectory (plain GD) instead of the main run, so
+            # the dynamics are clean at small init. gwdiaginit=1 ⇒ main run. Swap th/Jc/rr for the 3 diagnostic blocks,
+            # then RESTORE (below) so the interventions ⑤–⑨ and every later panel keep using the real main run.
+            _gd_save = None
+            if (gw2 or gw3 or gw4) and abs(gwdiaginit - 1.0) > 1e-9 and (N * outD) <= grid3dcap and dataset != "owt" and Jc is not None and rr is not None:
+                try:
+                    if gwdiag_th is None:
+                        gwdiag_th = (gwdiaginit * _th_init0).detach().clone()
+                    else:
+                        for _ in range(max(1, ee)):
+                            gwdiag_th = gwdiag_th - lr * gradL(gwdiag_th, X, Y)[0]
+                    _oD = _TL.model.forward(gwdiag_th, X)
+                    _rrD = (-N * _TL.loss.resid_cotangent(_oD, Y, N)).reshape(-1)
+                    _JcD, _ = jac_cols(gwdiag_th, X)
+                    _gd_save = (th, Jc, rr); th, Jc, rr = gwdiag_th, _JcD, _rrD   # swap in the shadow
+                except Exception:
+                    _gd_save = None
+
+            # ★grok-② (gw2) — direction-CHANGE of the top-3 residual-weighted-curvature (Q_r=M_r) eigenvectors.
+            #   For k=1,2,3 we follow u_k as a CONTINUOUS mode (max-overlap match to the previous tick, like §26) and
+            #   report |cos(u_{k,t}, u_{k,t−k'})| at short lags k'∈{1,2,5}. A downward crossing of the lag-1 cosine
+            #   below τ is one 'switch'; gw2_count[k] tallies them (edge-detected) so you see HOW MANY times each
+            #   direction changed over training. Own eigvecs+history ⇒ works with §26 off. Needs eig-every=1 for lag-1.
+            g_gw2 = None
+            if gw2 and (N * outD) <= grid3dcap and dataset != "owt" and Jc is not None and rr is not None:
+                try:
+                    _ev = _sec26_eigvecs(Jc, rr, th, X, N, outD)             # {gn,ntk,mrTop,mrBot}; we use mrTop (Q_r top-3)
+                    _mr = _ev["mrTop"]
+                    if gw2_hist:                                            # eigenvector continuation on the top-3 M_r modes
+                        prev = gw2_hist[-1]["mr"]; import itertools as _it
+                        O = [[abs(float(prev[i] @ _mr[j])) / max(float(prev[i].norm()) * float(_mr[j].norm()), 1e-30) for j in range(3)] for i in range(3)]
+                        bp = max(_it.permutations(range(3)), key=lambda pm: sum(O[i][pm[i]] for i in range(3)))
+                        _mr = [_mr[bp[i]] for i in range(3)]
+                    # lags measured in DIAGNOSTIC-TICK POSITIONS (gw2_hist[-lag]), NOT raw steps ⇒ lag-1/2/5 are the
+                    # previous 1/2/5 diagnostic ticks and are populated at ANY eig-every (the old t−kk keying left
+                    # lag-1 & lag-5 permanently empty whenever eig-every>1).
+                    cos = []                                                # cos[k] = [|cos| @ lag1, lag2, lag5]  (None until available / null vec)
+                    for i in range(3):
+                        a = _mr[i]; na = float(a.norm()); row = []
+                        for li, lag in enumerate((1, 2, 5)):
+                            c = None
+                            if len(gw2_hist) >= lag and na > 1e-30:
+                                b = gw2_hist[-lag]["mr"][i]; nb = float(b.norm())
+                                c = abs(float(a @ b)) / (na * nb) if nb > 1e-30 else None
+                            row.append(c)
+                            below = (c is not None and c < gw2tau)          # per-lag downward-crossing switch counter
+                            if below and not gw2_prev_below[i][li]: gw2_count[i][li] += 1
+                            gw2_prev_below[i][li] = below
+                        cos.append(row)
+                    g_gw2 = {"t": t, "lags": [1, 2, 5], "tau": gw2tau, "cos": cos, "count": [list(c) for c in gw2_count]}
+                    gw2_hist.append({"t": t, "mr": [v.detach().clone() for v in _mr]})
+                    if len(gw2_hist) > 8: gw2_hist.pop(0)                    # only need ≤5-tick lag
+                except Exception:
+                    g_gw2 = None
+
+            # ★grok-③ (gw3) — ALL of §6 (residual↔spectrum alignment) under FOUR choices of the function-Hessian Q.
+            #   Panel 1 (NTK, Q-INDEPENDENT) + Panel 3 (Gauss-Newton/Fisher, Q-INDEPENDENT) are computed once and
+            #   overlaid identically across modes; Panel 2 (M_r=Σ_k r_kQ_k) is recomputed under each mode
+            #   {evolving Q(θ_t), init-fixed Q(θ₀), random (dense), random-low-rank}. Each panel = 4 bars
+            #   (bare cosine, raw, ×eigenvalue two ways). Plus a per-mode SLQ M_r spectrum. The widget's multi-select
+            #   dropdown chooses which modes to overlay; the GD run is identical for all modes.
+            g_gw3 = None
+            if gw3 and (N * outD) <= grid3dcap and dataset != "owt" and Jc is not None and rr is not None:
+                try:
+                    Jm3 = Jc[:M]; r3 = rr[:M]; rc3 = r3.reshape(N, outD)
+                    Jr3 = Jm3.t() @ r3; Jrn3 = float(Jr3.norm()) + 1e-30
+                    rn3 = max(float(r3.norm()), 1e-30); scN = 1.0 / max(N, 1)
+                    Klan = max(1, min(gw3k, p)); mlan = min(p, max(5 * Klan, 64)); q0g = _randvec16(p, SEC21_SEED)
+                    if gw3_th0 is None:
+                        gw3_th0 = th.detach().clone()
+                        # dense random Q is an (M,p,p) tensor — build it whenever it FITS. Cap adapts to free GPU memory
+                        # (35% of it, leaving headroom for the HVPs) instead of a fixed 8 GB, so the "random" (dense) case
+                        # appears for far larger models before falling back to None (only random-low-rank then). Overridable.
+                        _qcap = float(P.get("gw3randcap", 0.0))
+                        if _qcap <= 0:
+                            if _dev().type == "cuda":
+                                try: _qcap = 0.35 * float(torch.cuda.mem_get_info(_dev())[0])
+                                except Exception: _qcap = 8e9
+                            else:
+                                _qcap = 8e9
+                        if M * p * p * 4 <= _qcap:
+                            gw3_Qrand = _build_randQ(gw3_th0, X, M, "gauss", 0xC0FFEE, 4)   # per-sample dense (M,p,p) — most faithful
+                        elif 3 * p * p * 4 <= _qcap:
+                            gw3_Qrand = _build_shared_randQ(gw3_th0, X, M, "gauss", 0xC0FFEE, 4)   # ONE shared (p,p) fallback (fits ~M× larger models); 3× headroom for the G+Gᵀ build transient
+                        else:
+                            gw3_Qrand = None   # even a single (p,p) won't fit ⇒ 'random (dense)' unavailable (only random-low-rank)
+                    # ---- Panel 1: NTK = JJᵀ, residual r projected onto top-K ⊕ bottom-K eigvecs — under 4 J-VARIANTS ----
+                    #   The NTK is Q-independent, so the 4 grok-③ cases here vary the JACOBIAN J (not Q): the residual r is
+                    #   projected onto the top⊕bottom eigvecs of JJᵀ for J = { evolving J(θ_t), init-fixed J(θ₀), random J,
+                    #   random-low-rank J }. Evolving vs init-fixed diverge as θ moves off θ₀; the 2 random J's are null
+                    #   baselines. This is the Panel-1 analogue of Panel-2's 4 M_r modes ⇒ 4 genuinely distinct curves.
+                    def _ntkpanel(Jv):
+                        Kc_, Vc_ = sym_eig_desc(Jv @ Jv.t()); Mv = int(Kc_.numel())
+                        _kt = min(Klan, Mv); _bt = min(Klan, Mv - _kt); _pos = list(range(_kt)) + list(range(Mv - _bt, Mv))
+                        sig = []; n1 = []; n2 = []; n3 = []; n4 = []
+                        for i in _pos:
+                            si = float(Kc_[i]) * scN; ap = abs(float(Vc_[:, i] @ r3))
+                            sig.append(si); n1.append(ap / rn3); n2.append(ap); n3.append(si * ap / rn3); n4.append(si * ap)
+                        return {"sig": sig, "n1": n1, "n2": n2, "n3": n3, "n4": n4, "nt": len(_pos)}, Kc_, Vc_
+                    ntk = {}
+                    ntk["ev"], Kc, Vc = _ntkpanel(Jm3)                                           # evolving J(θ_t) — Kc,Vc reused by Panel 3 (GN/MSE) below
+                    _nt0 = float(Kc[0]) if Kc.numel() else 1.0
+                    ntk["fx"], _, _ = _ntkpanel(jac_cols(gw3_th0, X)[0][:M])                     # init-fixed J(θ₀)   (frozen at init)
+                    _gnt = torch.Generator(device=_dev()); _gnt.manual_seed(0x17A5EED ^ ((t * 2246822519) & 0x7FFFFFFF))
+                    _ntsc = (max(_nt0, 0.0) ** 0.5) / max(M ** 0.5 + p ** 0.5, 1.0)              # scale rows so the random Wishart edge (√M+√p)²·s² ≈ true NTK top
+                    Jnt = torch.randn(M, p, generator=_gnt, dtype=Jm3.dtype, device=_dev()) * _ntsc
+                    ntk["rd"], _, _ = _ntkpanel(Jnt)                                             # random J ⇒ Wishart NTK (structured, full rank min(M,p))
+                    _Ulq, _ = torch.linalg.qr(torch.randn(M, M, generator=_gnt, dtype=Jm3.dtype, device=_dev()))
+                    _decn = min(0.999, max(0.1, float(P.get("gw3lrdecay", 0.85))))
+                    _svl = (max(_nt0, 0.0) ** 0.5) * torch.tensor([_decn ** i for i in range(M)], dtype=Jm3.dtype, device=_dev())
+                    ntk["lr"], _, _ = _ntkpanel(_Ulq * _svl)                                     # NTK = Ulq diag(_svl²) Ulqᵀ ⇒ decaying spectrum (low stable rank)
+                    # legacy single-J fields (kept so any old reader / SLQ path that referenced them still resolves)
+                    sig = ntk["ev"]["sig"]; n1 = ntk["ev"]["n1"]; n2 = ntk["ev"]["n2"]; n3 = ntk["ev"]["n3"]; n4 = ntk["ev"]["n4"]; nt = ntk["ev"]["nt"]
+                    # ---- Panel 3: Gauss-Newton (MSE) / Fisher (CE), J·r projected onto its top-K eigvecs (Q-independent) ----
+                    if _TL.loss.name == "ce":
+                        Jgn = _gn_jac(Jm3, th, X, N, outD); Kgc, Vgc = sym_eig_desc(Jgn @ Jgn.t())
+                    else:
+                        Jgn, Kgc, Vgc = Jm3, Kc, Vc
+                    Mg = int(Kgc.numel()); _ktg = min(Klan, Mg); _btg = min(Klan, Mg - _ktg); _posG = list(range(_ktg)) + list(range(Mg - _btg, Mg)); ng = len(_posG)   # top-K ⊕ bottom-K GN/Fisher eigvecs
+                    ntol = 1e-9 * float(Kgc[0]) if Kgc.numel() else 0.0
+                    cg = []; gp1 = []; gp2 = []; gp3 = []; gp4 = []
+                    for i in _posG:
+                        zi = Jgn.t() @ Vgc[:, i]; zn = float(zi.norm())
+                        if float(Kgc[i]) <= ntol or zn < 1e-30:
+                            cg.append(0.0); gp1.append(0.0); gp2.append(0.0); gp3.append(0.0); gp4.append(0.0); continue
+                        zi = zi / zn; ci = float(Kgc[i]) * scN; ap = abs(float(zi @ Jr3))
+                        cg.append(ci); gp1.append(ap / Jrn3); gp2.append(ap); gp3.append(ci * ap / Jrn3); gp4.append(ci * ap)
+                    # ---- Panel 2: M_r top-K ⊕ bottom-K, J·r projected — one call per mode (M_r operator differs) ----
+                    def _mrpanel(mr_op):
+                        Qb, T, k = _lanczos_core(mr_op, p, mlan, 0, dt=Jm3.dtype, q0=q0g)
+                        mu, Sv = _safe_eigh(T); desc = torch.argsort(mu, descending=True); Qm = torch.stack(Qb)
+                        kt = min(Klan, k); bs = max(kt, k - Klan); positions = list(range(kt)) + list(range(bs, k))
+                        lam = []; p1 = []; p2 = []; p3 = []; p4 = []; muv = []
+                        for pos in positions:
+                            ix = int(desc[pos]); li = float(mu[ix]) * scN; muv.append(float(mu[ix]))
+                            ui = Sv[:, ix].to(device=_dev(), dtype=Jm3.dtype) @ Qm; ap = abs(float(ui @ Jr3))
+                            lam.append(li); p1.append(ap / Jrn3); p2.append(ap); p3.append(li * ap / Jrn3); p4.append(li * ap)
+                        return {"lam": lam, "p1": p1, "p2": p2, "p3": p3, "p4": p4}, muv
+                    def _mode_op(qc):
+                        def op(v):
+                            prev = getattr(_TL, "qcfg", None); _TL.qcfg = qc
+                            try: return hvpS(th, X, v, rc3)
+                            finally: _TL.qcfg = prev
+                        return op
+                    mr = {}
+                    mr["ev"], mu_ev = _mrpanel(_mode_op(None))
+                    mr["fx"], _ = _mrpanel(_mode_op({"mode": "fix", "theta_t": gw3_th0, "Qrand": None}))
+                    # "random": M_r from random r_i AND random Q_i (both iid Gaussian) ⇒ a random SIGNED symmetric
+                    #   matrix with a STRUCTURED (Wigner-like) eigenvalue spectrum. Matrix-free B Bᵀ − C Cᵀ (difference
+                    #   of two Wisharts): signed, high true rank, works at ANY p (no dense (p,p) tensor, no residual
+                    #   weighting ⇒ never degenerate near convergence). Scaled so the top eigenvalue ≈ the true M_r top.
+                    _grd = torch.Generator(device=_dev()); _grd.manual_seed(0xC0FFEE ^ ((t * 40503) & 0x7FFFFFFF))
+                    _qrd = min(p, max(64, 4 * Klan))
+                    Brd = torch.randn(p, _qrd, generator=_grd, dtype=Jm3.dtype, device=_dev())
+                    Crd = torch.randn(p, _qrd, generator=_grd, dtype=Jm3.dtype, device=_dev())
+                    _rdsc = (abs(mu_ev[0]) if mu_ev else 1.0) / max(4.0 * _qrd, 1.0)   # ≈ divide by the Wishart edge (2√q)²
+                    op_rd = lambda v: _rdsc * (Brd @ (Brd.t() @ v) - Crd @ (Crd.t() @ v))
+                    mr["rd"], _ = _mrpanel(op_rd)
+                    # "random-low-rank": LOW STABLE rank (few dominant λ) but HIGH true rank — m random orthonormal
+                    #   directions with SIGNED, GEOMETRICALLY-DECAYING eigenvalues (true rank m, stable rank ≈ 1/(1−decay²)).
+                    r_ = min(p, max(gw3rank, 60)); _gen = torch.Generator(device=_dev()); _gen.manual_seed((t * 2654435761) & 0x7FFFFFFF)
+                    Ulr, _ = torch.linalg.qr(torch.randn(p, r_, generator=_gen, dtype=Jm3.dtype, device=_dev()))
+                    _decay = min(0.999, max(0.1, float(P.get("gw3lrdecay", 0.85))))
+                    _signs = torch.randint(0, 2, (r_,), generator=_gen, device=_dev()).to(Jm3.dtype) * 2 - 1
+                    lam_lr = (abs(mu_ev[0]) if mu_ev else 1.0) * _signs * torch.tensor([_decay ** i for i in range(r_)], dtype=Jm3.dtype, device=_dev())
+                    op_lr = lambda v: Ulr @ (lam_lr * (Ulr.t() @ v))
+                    mr["lr"], _ = _mrpanel(op_lr)
+                    g_gw3 = {"t": t, "rank": r_, "K": Klan,
+                             "ntk": ntk,                                          # {ev,fx,rd,lr} — 4 J-variants (evolving/init-fixed/random/random-low-rank)
+                             "gn": {"cg": cg, "gp1": gp1, "gp2": gp2, "gp3": gp3, "gp4": gp4, "ng": ng},
+                             "mr": mr}
+                    # ---- Panel-0 (EVOLUTION time-series, rendered FIRST): loss, sharpness λmax(∇²L), and the top⊕bottom
+                    #   eigenvalue of M_r=Σ_i r_iQ_i (Qr) and of the UNWEIGHTED Σ_i Q_i — all curvature terms on the ÷N
+                    #   (per-sample) scale where 2/η lives, so sharpness and the eigenvalues are directly comparable. ----
+                    try:
+                        _mrmu = mu_ev if mu_ev else [0.0]
+                        mrTop = float(_mrmu[0]) * scN; mrBot = float(_mrmu[-1]) * scN
+                        oc3 = torch.ones(N, outD, dtype=Jm3.dtype, device=_dev())                 # all-ones cotangent ⇒ Σ_i Q_i (unweighted)
+                        _Qbh, _Th, _kh = _lanczos_core(lambda v: hvpS(th, X, v, oc3), p, mlan, 0, dt=Jm3.dtype, q0=q0g)
+                        _muh, _ = _safe_eigh(_Th); hTop = float(_muh.max()) * scN; hBot = float(_muh.min()) * scN
+                        _u = _randvec16(p, 0x5EED1).to(dtype=Jm3.dtype, device=_dev())             # power iteration → λmax(∇²L) = sharpness
+                        for _ in range(10):
+                            _v = hvpL(th, X, Y, _u); _nv = float(_v.norm())
+                            if not (_nv == _nv) or _nv < 1e-30: break
+                            _u = _v / _nv
+                        _sharp = abs(float(_u @ hvpL(th, X, Y, _u)))
+                        _otr = _TL.model.forward(th, X); _lval = float(_TL.loss.value(_otr, Y, N))
+                        def _bacc(out, tgt):
+                            if out.dim() >= 2 and out.shape[-1] > 1:
+                                pred = out.argmax(-1); true = tgt.argmax(-1)
+                                recs = [float((pred[m] == c).float().mean()) for c in true.unique().tolist() for m in [(true == c)] if m.any()]
+                                return float(sum(recs) / len(recs)) if recs else 0.0
+                            ps = torch.sign(out).reshape(-1); ts = torch.sign(tgt).reshape(-1)
+                            recs = [float((ps[m] == s).float().mean()) for s in (1.0, -1.0) for m in [(ts == s)] if m.any()]
+                            return float(sum(recs) / len(recs)) if recs else 0.0
+                        _atr = _bacc(_otr, Y); _lte = None; _ate = None
+                        if Xtest is not None:
+                            _ote = _TL.model.forward(th, Xtest); _lte = float(_TL.loss.value(_ote, Ytest, Ntest)); _ate = _bacc(_ote, Ytest)
+                        g_gw3["evo"] = {"loss": _lval, "lte": _lte, "atr": _atr, "ate": _ate,
+                                        "sharp": _sharp, "mrTop": mrTop, "mrBot": mrBot, "hTop": hTop, "hBot": hBot}
+                    except Exception:
+                        pass
+                    if t % gw3specevery == 0 or t == steps:                          # throttled SLQ M_r spectrum per mode (client plots |λ| log-log)
+                        try:
+                            spec = {}
+                            spec["ev"] = slq_density(_mode_op(None), p, 4, 24, 100, 0xC0FFEE, block=1)
+                            spec["fx"] = slq_density(_mode_op({"mode": "fix", "theta_t": gw3_th0, "Qrand": None}), p, 4, 24, 100, 0xC0FFEE, block=1)
+                            spec["rd"] = slq_density(op_rd, p, 4, 24, 100, 0xC0FFEE, block=1)   # random signed symmetric (Wigner-like)
+                            spec["lr"] = slq_density(op_lr, p, 4, 24, 100, 0xC0FFEE, block=1)   # low stable rank, high true rank (decaying)
+                            g_gw3["spec"] = spec
+                        except Exception:
+                            pass
+                except Exception:
+                    g_gw3 = None
+
+            # ★grok-④ (gw4) — CURVATURE-SUBSPACE PERSISTENCE. At each reference iteration T₀ ∈ gw4t0s we FREEZE the
+            #   top-k and bottom-k eigenvectors of M_r (two orthonormal reference subspaces). Then at every later tick t
+            #   we recompute the current top-k / bottom-k eigenvectors of M_r and ask, for each, whether it lies IN the
+            #   span of the frozen reference (projection energy ‖P_ref v‖² > thr) or OUT. Four counts per reference —
+            #   top-in, top-out, bot-in, bot-out — plotted over training, one panel per T₀.
+            g_gw4 = None
+            if gw4 and (N * outD) <= grid3dcap and dataset != "owt" and Jc is not None and rr is not None:
+                try:
+                    rc4 = rr[:M].reshape(N, outD); K4 = min(gw4K, max(1, p // 2))
+                    oc4 = torch.ones(N, outD, dtype=DTYPE, device=_dev())           # all-ones cotangent ⇒ H = Σ_i Q_i (unweighted function Hessian)
+
+                    def _gw4_persist(op, refs_store):
+                        # current top-k (largest λ) AND bottom-k (most-negative λ) eigvectors of `op`, matrix-free
+                        Qb, T, kk = _lanczos_core(op, p, min(p, max(64, 12 * K4)), 0, dt=DTYPE, q0=_randvec16(p, SEC21_SEED))   # richer Krylov ⇒ the k-th eigvec is accurate ⇒ fewer SPURIOUS in/out swaps (near-degenerate directions)
+                        mu, Sv = _safe_eigh(T); asc = torch.argsort(mu); Qm = torch.stack(Qb)
+                        def _vecs(idxs):
+                            V = torch.stack([Sv[:, int(j)].to(device=_dev(), dtype=DTYPE) @ Qm for j in idxs])
+                            Q, _ = torch.linalg.qr(V.t())                           # orthonormal basis of that k-subspace (p×k)
+                            return Q
+                        kc = min(K4, len(asc) // 2) if len(asc) >= 2 else 1
+                        topV = _vecs([int(asc[-1 - i]) for i in range(kc)])         # p×kc  top-k (largest λ)
+                        botV = _vecs([int(asc[i]) for i in range(kc)])              # p×kc  bottom-k (most negative λ)
+                        for T0 in gw4t0s:                                           # capture references as training first reaches each T₀
+                            if T0 not in refs_store and t >= T0:
+                                refs_store[T0] = {"top": topV.detach().clone(), "bot": botV.detach().clone(), "cap": t}
+                        def _count_in(curr, ref):                                   # how many columns of curr lie in span(ref): ‖ref refᵀ v‖²>thr
+                            proj = ref @ (ref.t() @ curr)
+                            e = (proj * proj).sum(0) / (curr * curr).sum(0).clamp_min(1e-30)
+                            nin = int((e > gw4thr).sum()); return nin, curr.shape[1] - nin
+                        refs = {}
+                        for T0, R in refs_store.items():
+                            ti, to = _count_in(topV, R["top"]); bi, bo = _count_in(botV, R["bot"])
+                            refs[str(T0)] = {"top_in": ti, "top_out": to, "bot_in": bi, "bot_out": bo, "cap": R["cap"]}
+                        return refs, kc
+
+                    refs_mr, kc = _gw4_persist(lambda v: hvpS(th, X, v, rc4), gw4_refs)     # M_r = Σ_i r_i Q_i
+                    refs_h, _ = _gw4_persist(lambda v: hvpS(th, X, v, oc4), gw4h_refs)      # H   = Σ_i Q_i (unweighted)
+                    g_gw4 = {"t": t, "k": kc, "thr": gw4thr, "t0s": gw4t0s, "refs": refs_mr, "refsH": refs_h}
+                except Exception:
+                    g_gw4 = None
+
+            if _gd_save is not None:   # RESTORE the real main-run th/Jc/rr (grok-① and the interventions must use θ₀)
+                th, Jc, rr = _gd_save
+
+            # ★grok-① (gw1) — ONE-SHOT init-scale sweep (fires once, at the first diagnostic tick). For each σ
+            #   (θ=σ·θ₀, log grid 0.1→10): NTK top-3 eigvecs u_i, x_i=|u_iᵀr|/‖r‖, colour=|gᵀM_rg|−|gᵀJᵀJg| (g=Jᵀr),
+            #   y=Δ‖J‖_F over gw1steps GD steps at that θ. Tests the ratio→PS→alignment story across init scales.
+            # ROUND-ROBIN the one-shot sweeps ①⑤⑥⑦⑧⑨: fire AT MOST ONE per diagnostic tick so the main dashboard
+            # (loss / sharpness / gw②③④) keeps streaming between them — computing them ALL at the first tick made
+            # "select all groks" freeze for ~20 s before any progress showed. Any still-pending at the last diagnostic
+            # tick (t+ee>steps) fire together so nothing is dropped on short runs. _gw_fired set only on SUCCESS.
+            _gw_fired = False
+            g_gw1 = None
+            if gw1 and not gw1_done and (N * outD) <= grid3dcap and dataset != "owt" and Jc is not None and (t + ee > steps):
+                try:
+                    th0s = th.detach().clone()
+                    # WIDE log grid of init scales (default 100 points, σ ∈ 10^[-1.5,1.5] ≈ 0.03 … 32).
+                    _s1lo = float(P.get("gw1siglo", -3.0)); _s1hi = float(P.get("gw1sighi", 1.5))   # log10 σ range: extended DOWN to 1e-3 (was 10^-1.5≈0.03) so the small-init regime is sampled alongside the large values
+                    sig = [float(10.0 ** (_s1lo + (_s1hi - _s1lo) * i / (gw1n - 1))) for i in range(gw1n)]
+                    pts = []
+                    for s_ in sig:
+                        ths = (s_ * th0s).detach().clone()
+                        o_ = _TL.model.forward(ths, X); rr_ = (Y - o_); r_ = rr_.reshape(-1)[:M]; rc_ = rr_.reshape(N, outD)
+                        rn_ = float(r_.norm()) + 1e-30
+                        Jc_, _ = jac_cols(ths, X); Jg_ = Jc_[:M]; g_ = Jg_.t() @ r_          # g = Jᵀr
+                        Kc_, Vc_ = sym_eig_desc(Jg_ @ Jg_.t())                                # NTK eigvecs (M-dim)
+                        a = [abs(float(Vc_[:, i] @ r_)) / rn_ for i in range(min(3, M))]
+                        while len(a) < 3: a.append(None)
+                        gMrg = float(g_ @ hvpS(ths, X, g_, rc_)); gJJg = float((Jg_ @ g_).pow(2).sum())
+                        Jf0 = float((Jg_ * Jg_).sum()) ** 0.5
+                        # per-σ lr = a FIXED FRACTION β of the per-step Edge-of-Stability threshold 2/λmax(∇²L), so the
+                        # lr UPSCALES as the init scale σ shrinks (small σ ⇒ low sharpness ⇒ larger lr ⇒ its otherwise
+                        # near-frozen dynamics become visible) and DOWNscales for large σ. β=0.1 ⇒ sharpness·lr = 0.2 =
+                        # 10% of the 2/lr edge ⇒ ~10× headroom, so progressive sharpening cannot reach EoS within 1-2
+                        # iterations. λmax is recomputed each step (adapts to PS). The β·(2/λmax) rule depends ONLY on sharpness,
+                        # so a small-σ (low-λmax) init gets a large lr no matter how small ‖θ‖ is — that IS the upscaling.
+                        # Only an absolute lr ceiling guards the pathological λmax→0. (No ‖θ‖-proportional trust region:
+                        # ‖θ‖ is tiny at small σ, so such a cap would THROTTLE exactly the upscaling we want here.)
+                        _beta = float(P.get("gw1eosfrac", 0.1))                    # target sharpness·lr fraction of 2 (EoS)
+                        _lrceil = float(P.get("gw1lrmax", 0.0)) or (1.0e3 * max(lr, 1e-6))
+                        sharp0 = float(lanczos_extreme_vals(lambda v: hvpL(ths, X, Y, v), p, 1, min(p, 24), 0x5EED1)[0][0])
+                        thg = ths.clone(); lr_used = []
+                        for _ in range(gw1steps):
+                            sh_t = float(lanczos_extreme_vals(lambda v: hvpL(thg, X, Y, v), p, 1, min(p, 24), 0x5EED1)[0][0])
+                            lr_t = min(_lrceil, (2.0 * _beta) / max(sh_t, 1e-12))  # ≈0.2/λmax: below EoS, UPSCALED for small σ
+                            gl_, _ = gradL(thg, X, Y)
+                            lr_used.append(lr_t); thg = thg - lr_t * gl_
+                        Jcg, _ = jac_cols(thg, X); Jf1 = float((Jcg[:M] * Jcg[:M]).sum()) ** 0.5
+                        pts.append({"s": s_, "a1": a[0], "a2": a[1], "a3": a[2], "dJ": Jf1 - Jf0, "col": abs(gMrg) - abs(gJJg), "ps": sharp0, "lreff": (sum(lr_used) / len(lr_used) if lr_used else lr)})
+                    g_gw1 = {"t": t, "pts": pts}; gw1_done = True; _gw_fired = True
+                except Exception:
+                    g_gw1 = None; gw1_done = True
+
+            # ★grok-⑤⑥⑦⑧ (page-1 INTERVENTION experiments) — ONE-SHOT live sweeps (fire once at the first tick).
+            #   Each trains gw_n SHORT runs over an intervention axis and records the causal chain per run:
+            #   test/train loss+acc (grokking), ratio |gᵀM_rg|/|gᵀJJᵀg|, PS λ_max(∇²L), J↔r alignment.
+            _grokable = (dataset != "owt")   # interventions gw5/6/7/9 are model-agnostic (own data + generic gradL/hvpS/jac_cols); gw8 (activation swap) additionally needs an MLP — gated below
+            Xtr_g = Ytr_g = Xte_g = Yte_g = None; Ntr_g = Nte_g = 0
+            if (gw5 or gw6 or gw7 or gw8 or gw9 or gw10) and _grokable and (not (gw5_done and gw6_done and gw7_done and gw8_done and gw9_done and gw10_done)):
+                try:
+                    # grok-⑤–⑩ build their OWN larger TRAIN (gw_nsamp) + disjoint TEST (gw_nte) sets from the same
+                    # dataset generator — so test loss/acc always populate (every dataset) and N is large enough to
+                    # separate memorization from generalization. init_data_theta covers all datasets uniformly.
+                    _, Xtr_g, Ytr_g, _, _ = init_data_theta(P, dataset, gw_nsamp, inDimE, outDimE); Ntr_g = Xtr_g.shape[0]
+                    Pte = dict(P); Pte["seed"] = (int(P["seed"]) + 987654) & 0x7FFFFFFF
+                    _, Xte_g, Yte_g, _, _ = init_data_theta(Pte, dataset, gw_nte, inDimE, outDimE); Nte_g = Xte_g.shape[0]
+                except Exception:
+                    Xtr_g = Ytr_g = Xte_g = Yte_g = None; Ntr_g = Nte_g = 0
+            if (gw5 or gw6 or gw7 or gw8 or gw9 or gw10) and Xtr_g is None:
+                _grokable = False   # data build failed ⇒ skip the interventions this run
+            if gw8 and not isinstance(_TL.model, MlpModel):
+                gw8_done = True     # activation-swap is MLP-only ⇒ mark done so the data-rebuild guard resolves
+
+            g_gw5 = None                                                          # ⑤ Initialization: sweep init scale σ
+            if gw5 and not gw5_done and _grokable and (t + ee > steps):
+                try:
+                    th0g = _th_init0.detach().clone()   # sweep starts from the fresh init θ₀
+                    sig = [float(10.0 ** (-0.8 + 1.6 * i / (gw_n - 1))) for i in range(gw_n)]   # σ ∈ [0.16, 6.3] log grid
+                    lastw = spec_lastlayer_slice(_TL.model.spec, p) if isinstance(_TL.model, MlpModel) else None   # last-layer slice (MLP only; non-MLP ⇒ "last" falls back to "all")
+                    # per-σ lr scaled by (σ_ref/σ)^gw5lrpow (default 0.5 = SQUARE ROOT of the σ-ratio). The full square
+                    #   (pow=2, lr∝1/σ²) EoS-normalizes a depth-2 net but blows the small-σ lr up too much; the square-root
+                    #   is a gentler upscaling that still gives small-σ runs a larger lr without exploding. σ_ref (gw5lrref,
+                    #   default 1 = θ₀) uses the base lr; set gw5lrpow=2 for the full EoS-normalizing square, 0 to disable.
+                    gw5lrscale = P.get("gw5lrscale", "1") == "1"; gw5lrref = float(P.get("gw5lrref", 1.0)); gw5lrpow = float(P.get("gw5lrpow", 0.5))
+                    _s5specs = []; _s5gens = []
+                    for s_ in sig:
+                        lr_i = (lr * (gw5lrref / max(s_, 1e-12)) ** gw5lrpow) if gw5lrscale else lr
+                        thi = (s_ * th0g).detach().clone() if gw5layer == "all" else th0g.detach().clone()
+                        if gw5layer == "last" and lastw is not None:
+                            o0, l0 = lastw; thi[o0:o0 + l0] = s_ * th0g[o0:o0 + l0]
+                        _s5gens.append(_grok_train_iter(thi, Xtr_g, Ytr_g, Xte_g, Yte_g, gw_steps, gw_ev, Ntr_g, Nte_g, outD, ce, _gd_step(Xtr_g, Ytr_g, lr_i),
+                                          batch=gw_batch, bseed=int(P["seed"]), mk_step=(lambda Xb, Yb, Nb, _l=lr_i: _gd_step(Xb, Yb, _l))))
+                        _s5specs.append({"x": s_, "lr": lr_i})
+                    # EXTRA baseline: iid-Gaussian init θ~N(μ,σ) with (μ,σ) TUNED to maximize |gᵀM_r g|/gᵀJJᵀg (gᵀJJᵀg floored).
+                    #   lr scaled by (σ_ref/σ_tuned)^pow — the SAME rule as the swept runs (σ_ref = "high σ" gw5lrref).
+                    tuned_meta = None
+                    try:
+                        mu_t, sig_t, th_t, ratio_t, jjg_t, sh_t = _tune_gauss_init(_TL.model, Xtr_g, Ytr_g, Ntr_g, outDimE, seed=int(P["seed"]), lr=lr, stab=1.7)
+                        if th_t is not None:
+                            lr_t = (lr * (gw5lrref / max(sig_t, 1e-12)) ** gw5lrpow) if gw5lrscale else lr
+                            if sh_t > 1e-9: lr_t = min(lr_t, 1.7 / sh_t)                          # ★STABILITY CLAMP: keep σ_H·lr_t ≤ 1.7 < 2 (sub-EoS) so the tuned init can't diverge
+                            _s5gens.append(_grok_train_iter(th_t.detach().clone(), Xtr_g, Ytr_g, Xte_g, Yte_g, gw_steps, gw_ev, Ntr_g, Nte_g, outD, ce, _gd_step(Xtr_g, Ytr_g, lr_t),
+                                                batch=gw_batch, bseed=int(P["seed"]), mk_step=(lambda Xb, Yb, Nb, _l=lr_t: _gd_step(Xb, Yb, _l))))
+                            _s5specs.append({"x": -1.0, "name": f"tuned N(μ={mu_t:.3g},σ={sig_t:.3g})", "mu": mu_t, "sigma": sig_t, "lr": lr_t})
+                            tuned_meta = {"mu": mu_t, "sigma": sig_t, "ratio": ratio_t, "lr": lr_t, "sigref": gw5lrref, "pow": gw5lrpow, "sharp": sh_t}
+                    except Exception:
+                        tuned_meta = None
+                    def _build5(recs, _t=t):
+                        return {"t": _t, "axis": "init scale σ", "layer": gw5layer, "lrscale": gw5lrscale,
+                                "runs": [{**_s5specs[i], **(recs[i] or {})} for i in range(len(_s5specs))], "tuned": tuned_meta}
+                    _s5final = yield from _stream_runs(_s5gens, _build5, "gw5")     # LIVE
+                    g_gw5 = _build5(_s5final); gw5_done = True; _gw_fired = True
+                except Exception:
+                    g_gw5 = None; gw5_done = True
+
+            g_gw6 = None                                                          # ⑥ Output scaling: sweep a gain α on the TARGET LABELS Y
+            if gw6 and not gw6_done and _grokable and (t + ee > steps):
+                try:
+                    th0g = (gw6init * _th_init0).detach().clone()   # small init θ=gw6init·θ₀
+                    _af = max(1.0001, float(P.get("gw6arange", 4.0)))            # α range factor: sweep is log-symmetric α ∈ [1/_af, _af] around 1 (widened default 4 ⇒ 0.25…4; was 0.5…2)
+                    alpha = [float((1.0 / _af) * ((_af * _af) ** (i / (gw_n - 1)))) for i in range(gw_n)]   # target-label gain α ∈ [1/_af, _af]
+                    nIv = max(1, gw_steps // max(1, (gw_steps // 5)))              # ~5 ramp intervals over the run
+                    ivlen = max(1, gw_steps // 5)
+                    _s6specs = []; _s6gens = []
+                    for _j, a_ in enumerate(alpha):
+                        if gw6mode == "interval":                                 # ramp targets Y ← Y + fraction·Y₀ every ivlen steps, up to α·Y₀
+                            yscale = (lambda av: (lambda t: 1.0 + (av - 1.0) * (min(t // ivlen, nIv) / max(nIv, 1))))(a_)
+                        else:                                                     # scale the targets once at init: Y ← α·Y₀ (constant)
+                            yscale = (lambda av: (lambda t: av))(a_)
+                        _s6gens.append(_grok_train_iter(th0g.detach().clone(), Xtr_g, Ytr_g, Xte_g, Yte_g, gw_steps, gw_ev, Ntr_g, Nte_g, outD, ce, None, yscale_fn=yscale, lr=lr,
+                                          batch=gw_batch, bseed=int(P["seed"])))  # ⑥ minibatch handled internally (GD on the scaled minibatch targets)
+                        _s6specs.append({"x": a_, "cidx": _j})                    # solid: scaled targets, base lr
+                        # BASELINE (same colour, DOTTED): UNSCALED targets but lr×α — tests whether output-scaling ≈ lr-scaling
+                        _lrb = lr * a_
+                        _s6gens.append(_grok_train_iter(th0g.detach().clone(), Xtr_g, Ytr_g, Xte_g, Yte_g, gw_steps, gw_ev, Ntr_g, Nte_g, outD, ce,
+                                            _gd_step(Xtr_g, Ytr_g, _lrb), batch=gw_batch, bseed=int(P["seed"]),
+                                            mk_step=(lambda Xb, Yb, Nb, _l=_lrb: _gd_step(Xb, Yb, _l))))
+                        _s6specs.append({"x": a_, "cidx": _j, "dash": "dot", "name": f"α={a_:.2g} · unscaled·lr×α"})
+                    def _build6(recs, _t=t):
+                        return {"t": _t, "axis": "target-label gain α", "mode": gw6mode,
+                                "runs": [{**_s6specs[i], **(recs[i] or {})} for i in range(len(_s6specs))]}
+                    _s6final = yield from _stream_runs(_s6gens, _build6, "gw6")     # LIVE
+                    g_gw6 = _build6(_s6final); gw6_done = True; _gw_fired = True
+                except Exception:
+                    g_gw6 = None; gw6_done = True
+
+            g_gw7 = None                                                          # ⑦ Optimization: sweep λ in the modified update
+            if gw7 and not gw7_done and _grokable and (t + ee > steps):
+                try:
+                    th0g = (gw7init * _th_init0).detach().clone()   # small init θ=gw7init·θ₀
+                    _lammax = float(P.get("gw7lammax", 10.0))                     # λ sweep upper end (default 10; UI knob)
+                    # λ₁ weights the −Ḡ∇L (Gauss-Newton / JᵀJ) term, λ₂ weights the +M̄_r∇L (residual-curvature) term.
+                    # gw7sweep controls WHICH we vary to bias the update toward one term vs the other:
+                    #   both = λ₁=λ₂=λ (diagonal; the old behaviour) · mr = sweep λ₂ (M_r), λ₁ fixed=gw7lam1 ·
+                    #   gn = sweep λ₁ (JᵀJ), λ₂ fixed=gw7lam2 · bias = sweep the split with λ₁+λ₂=λmax FIXED
+                    #        (x=λ₂: 0 ⇒ pure JᵀJ bias, λmax ⇒ pure M_r bias, λmax/2 ⇒ balanced).
+                    gw7sweep = P.get("gw7sweep", "mr"); gw7lam1 = float(P.get("gw7lam1", 1.0)); gw7lam2 = float(P.get("gw7lam2", 0.0))
+                    _axlab = {"mr": "λ₂ (M_r weight)", "gn": "λ₁ (JᵀJ weight)",
+                              "bias": "λ₂ (M_r) with λ₁=λmax−λ₂", "both": "λ (λ₁=λ₂)"}.get(gw7sweep, "λ (λ₁=λ₂)")
+                    _s7specs = []; _s7gens = []
+                    # SYMMETRIC sweeps force an ODD count so λ=0 (plain GD) is ALWAYS one of the points.
+                    _gwn = gw_n if (gw7sweep == "bias" or gw_n % 2 == 1) else gw_n + 1
+                    for i in range(_gwn):
+                        # swept value: SYMMETRIC −λmax → +λmax for mr/gn/both (see both the subtracting & adding regimes);
+                        # bias keeps the convex 0 → λmax split (λ₁+λ₂=λmax can't go negative).
+                        if _gwn <= 1:            _f = 0.0
+                        elif gw7sweep == "bias": _f = _lammax * i / (_gwn - 1)
+                        else:                    _f = -_lammax + 2.0 * _lammax * i / (_gwn - 1)
+                        if gw7sweep == "mr":     lam2 = _f;            lam1 = gw7lam1;        xval = lam2
+                        elif gw7sweep == "gn":   lam1 = _f;            lam2 = gw7lam2;        xval = lam1
+                        elif gw7sweep == "bias": lam2 = _f;            lam1 = _lammax - _f;   xval = lam2   # λ₁+λ₂=λmax
+                        else:                    lam1 = lam2 = _f;                            xval = _f     # both (diagonal)
+                        # ★ anti-self-stabilization / anti-divergence lr schedule for ALL non-bias runs: it stays INACTIVE
+                        # (η=η₀) until σ nears the edge, so tame small-λ runs are unchanged — but it holds σ·η<2 once a run
+                        # blows up, keeping BOTH signs finite (positive-λ diverged to Inf before ⇒ Plotly dropped them).
+                        _neg_sched = (gw7sweep != "bias")
+                        if _neg_sched:
+                            sf = _opt_step_sched(Xtr_g, Ytr_g, Ntr_g, outD, lr, gw7schedsafety, gw7rule, lam1, lam2, xval, gw7sign)
+                            mkf = (lambda Xb, Yb, Nb, _l1=lam1, _l2=lam2, _x=xval: _opt_step_sched(Xb, Yb, Nb, outD, lr, gw7schedsafety, gw7rule, _l1, _l2, _x, gw7sign))
+                        elif gw7rule == "taylor":
+                            sf = _opt_step_taylor(Xtr_g, Ytr_g, Ntr_g, outD, lr, lam1, lam2)               # independent λ₁,λ₂
+                            mkf = (lambda Xb, Yb, Nb, _l1=lam1, _l2=lam2: _opt_step_taylor(Xb, Yb, Nb, outD, lr, _l1, _l2))
+                        else:                                                                              # star rule: single λ ⇒ use the swept value
+                            _sl = xval
+                            sf = _opt_step_star(Xtr_g, Ytr_g, Ntr_g, outD, lr, _sl, gw7sign)
+                            mkf = (lambda Xb, Yb, Nb, _l=_sl: _opt_step_star(Xb, Yb, Nb, outD, lr, _l, gw7sign))
+                        _s7gens.append(_grok_train_iter(th0g.detach().clone(), Xtr_g, Ytr_g, Xte_g, Yte_g, gw_steps, gw_ev, Ntr_g, Nte_g, outD, ce, sf,
+                                          batch=gw_batch, bseed=int(P["seed"]), mk_step=mkf))
+                        _s7specs.append({"x": xval, "l1": lam1, "l2": lam2})
+                    def _build7(recs, _t=t):
+                        return {"t": _t, "axis": _axlab, "rule": gw7rule, "sign": ("+" if gw7sign > 0 else "-"), "sweep": gw7sweep,
+                                "runs": [{**_s7specs[i], **(recs[i] or {})} for i in range(len(_s7specs))]}
+                    _s7final = yield from _stream_runs(_s7gens, _build7, "gw7")     # LIVE
+                    g_gw7 = _build7(_s7final); gw7_done = True; _gw_fired = True
+                except Exception:
+                    g_gw7 = None; gw7_done = True
+
+            g_gw8 = None                                                          # ⑧ Architecture: sweep activation (complexity ladder)
+            if gw8 and not gw8_done and _grokable and isinstance(_TL.model, MlpModel) and (t + ee > steps):   # activation swap rebuilds the MLP spec ⇒ MLP only
+                saved_model = _TL.model                                           # restore point (bound BEFORE the try)
+                try:
+                    th0g = (gw8init * _th_init0).detach().clone(); acts = ["relu", "gelu", "tanh", "sine", "bspline", "bsplinetuned"]   # relu→gelu→tanh→sine→LEARNED-spline→RATIO-TUNED-spline ladder
+                    base_spec = saved_model.spec; nlayer = len(base_spec); runs = []; _sc = getattr(saved_model, "init_scheme", "default")
+                    for ai, an in enumerate(acts):
+                        if an in ("bspline", "bsplinetuned"):
+                            # bspline = LEARNABLE KAN-style spline (arXiv:2503.10065; ψ trains — escapes simplicity bias).
+                            # bsplinetuned = FIXED spline whose shape is TUNED to raise gᵀM_r g/gᵀJJᵀg (ψ NOT in θ ⇒ frozen).
+                            # Both get their OWN fresh init θ (extra/absent ψ params), scaled by gw8init for the small-init match.
+                            if an == "bsplinetuned":
+                                m2 = TunedSplineMlpModel(inDimE, P["width"], P["depth"], outDimE, P["bias"] == "1",
+                                                         nc=int(P.get("splinenc", 50)), srange=float(P.get("splinerange", 5.0)),
+                                                         kappa=float(P.get("bsplinekappa", 2.5)))
+                            else:
+                                m2 = SplineMlpModel(inDimE, P["width"], P["depth"], outDimE, P["bias"] == "1",
+                                                    nc=int(P.get("splinenc", 50)), srange=float(P.get("splinerange", 5.0)))
+                            m2.init_scheme = _sc; _TL.model = m2
+                            th_start = (gw8init * m2.init_theta(P["seed"] + 1, P["init"])).detach().clone()
+                            if an == "bsplinetuned":
+                                try: m2.tune(th_start, Xtr_g, Ytr_g, Ntr_g, outDimE)   # tune the fixed shape on the grok train set
+                                except Exception: pass
+                            stepf = _gd_step(Xtr_g, Ytr_g, lr)
+                        else:
+                            spec2 = [(d0, d1, (an if k < nlayer - 1 else a2), w0, b0)  # swap hidden acts; keep the output layer linear
+                                     for k, (d0, d1, a2, w0, b0) in enumerate(base_spec)]
+                            m2 = MlpModel(spec2, p, saved_model.in_shape, saved_model.oc); m2.init_scheme = _sc
+                            _TL.model = m2; th_start = th0g.detach().clone(); stepf = _gd_step(Xtr_g, Ytr_g, lr)
+                        rec = _grok_train(th_start, Xtr_g, Ytr_g, Xte_g, Yte_g, gw_steps, gw_ev, Ntr_g, Nte_g, outD, ce, stepf,
+                                          batch=gw_batch, bseed=int(P["seed"]), mk_step=(lambda Xb, Yb, Nb: _gd_step(Xb, Yb, lr)))
+                        runs.append({"x": ai, "name": an, **rec})
+                        yield {"type": "gwstream", "which": "gw8", "payload": {"t": t, "axis": "activation", "runs": list(runs)}}   # LIVE per-activation (model swaps ⇒ per-run, not per-tick)
+                    g_gw8 = {"t": t, "axis": "activation", "runs": runs}; gw8_done = True; _gw_fired = True
+                except Exception:
+                    g_gw8 = None; gw8_done = True
+                finally:
+                    _TL.model = saved_model                                       # ALWAYS restore the real model
+
+            g_gw9 = None                                                          # ⑨ random-search on the top-M_r subspace + 2 subspace baselines (bottom-M_r, random) vs a GD baseline
+            if gw9 and not gw9_done and _grokable and (t + ee > steps):
+                try:
+                    th0g = (gw9init * _th_init0).detach().clone()   # small init θ=gw9init·θ₀
+                    def _rs_gen(md, refresh=gw9refresh):   # IDENTICAL random-search protocol, only the search subspace (and its refresh) differ (full-batch: needs the stable objective for accept/reject)
+                        rs = _rs_step(Xtr_g, Ytr_g, Ntr_g, outD, lr, gw9K, refresh, gw9try, gw9thr, mode=md)
+                        return _grok_train_iter(th0g.detach().clone(), Xtr_g, Ytr_g, Xte_g, Yte_g, gw_steps, gw_ev, Ntr_g, Nte_g, outD, ce, rs)
+                    _s9gens = [_rs_gen("top"), _rs_gen("bottom"), _rs_gen("rand"), _rs_gen("rand", 1), _rs_gen("rand", 10 ** 9),
+                               _grok_train_iter(th0g.detach().clone(), Xtr_g, Ytr_g, Xte_g, Yte_g, gw_steps, gw_ev, Ntr_g, Nte_g, outD, ce, _gd_step(Xtr_g, Ytr_g, lr),
+                                                batch=gw_batch, bseed=int(P["seed"]), mk_step=(lambda Xb, Yb, Nb: _gd_step(Xb, Yb, lr)))]
+                    _s9specs = [{"x": 0, "name": "random-search (top-M_r)"}, {"x": 1, "name": "baseline: bottom-M_r"},
+                                {"x": 2, "name": f"baseline: random subspace (refresh {gw9refresh})"}, {"x": 3, "name": "baseline: random subspace (refresh every step)"},
+                                {"x": 4, "name": "baseline: random subspace (fixed)"}, {"x": 5, "name": "GD baseline"}]
+                    def _build9(recs, _t=t):
+                        return {"t": _t, "axis": "optimizer", "runs": [{**_s9specs[i], **(recs[i] or {})} for i in range(len(_s9specs))]}
+                    _s9final = yield from _stream_runs(_s9gens, _build9, "gw9")     # LIVE
+                    g_gw9 = _build9(_s9final); gw9_done = True; _gw_fired = True
+                except Exception:
+                    g_gw9 = None; gw9_done = True
+
+            g_gw10 = None                                                         # ⑩ subspace-traversal random-search on Qr (top/bottom/null/random-K), step maximizes rᵀf (no gradient), for k∈{1,3,5}
+            if gw10 and not gw10_done and _grokable and (t + ee > steps):
+                try:
+                    th0g10 = (gw10init * _th_init0).detach().clone()              # init θ=gw10init·θ₀ (default = main run's init)
+                    _g10specs = []; _g10gens = []                                 # 3 k × 4 modes = 12 sub-runs, streamed in lockstep
+                    for K in (1, 3, 5):
+                        for md, nm in (("top", "top-k Qr"), ("bottom", "bottom-k Qr"), ("null", "null-k Qr"), ("rand", "random-k")):
+                            sf = _gw10_step(Xtr_g, Ytr_g, Ntr_g, outD, lr, K, gw10try, md)
+                            _g10gens.append(_gw10_train_iter(th0g10.detach().clone(), Xtr_g, Ytr_g, Xte_g, Yte_g, gw_steps, gw_ev, Ntr_g, Nte_g, outD, sf))
+                            _g10specs.append((K, md, nm))
+                    def _build10(recs, _t=t):
+                        byk = {str(K): {"runs": []} for K in (1, 3, 5)}
+                        for i, (K, md, nm) in enumerate(_g10specs):
+                            byk[str(K)]["runs"].append({"mode": md, "name": nm, **(recs[i] or {})})
+                        return {"t": _t, "ks": [1, 3, 5], "byk": byk}
+                    _g10final = yield from _stream_runs(_g10gens, _build10, "gw10")   # LIVE: yields partial payloads as curves grow
+                    g_gw10 = _build10(_g10final)
+                    gw10_done = True; _gw_fired = True
+                except Exception:
+                    g_gw10 = None; gw10_done = True
 
             # EARLY-DYNAMICS STATS (s42) — NOT a prediction. Plot 1: σ-weighted projection of Jᵀr onto the ±M_r
             #   eigenvectors, split by eigenvalue sign — posSum=Σ_{λ_i>0, top-K}|λ_i·(v_i·Jᵀr)|/‖Jᵀr‖, negSum the
@@ -4267,15 +5844,18 @@ def run_stream(P):
             # (Q_k=∇²f_k; matrix-free via hvpS). NOT a prediction — for eyeballing the eigenstructure over training (widget
             # keeps a per-iteration history + a scrubber). Independent of s42/ss.
             g_qspec = None
-            if qspec and _TL.loss.name in ("mse", "ce") and (N * outD) <= grid3dcap and dataset != "owt" and Jc is not None and rr is not None:
+            if qspec and (t % qspecevery == 0 or t == steps) and _TL.loss.name in ("mse", "ce") and (N * outD) <= grid3dcap and dataset != "owt" and Jc is not None and rr is not None:
                 try:
                     _rc_q = rr[:M].reshape(N, outD)
-                    _pairs_mr = _eds_eigpairs(th, X, _rc_q, p, qspeck, Jc.dtype)                     # Q_r = Σ_k r_kQ_k eigenpairs (top-k ⊕ bottom-k)
                     _ones_q = torch.ones(N, outD, dtype=Jc.dtype, device=_dev())
-                    _pairs_h = _eds_eigpairs(th, X, _ones_q, p, qspeck, Jc.dtype)                    # H = Σ_k Q_k eigenpairs (cotangent ≡ 1)
-                    _mr = sorted((float(lam) for (lam, _v) in _pairs_mr), reverse=True)              # eigenvalues, descending
-                    _h = sorted((float(lam) for (lam, _v) in _pairs_h), reverse=True)
-                    g_qspec = {"mr": _mr, "h": _h, "k": qspeck}
+                    if isinstance(_TL.model, MlpModel) and p <= QSPEC_FULL_CAP:                      # FULL spectrum (all p eigenvalues) — exact autograd Hessian materialization, MLP only
+                        _mr = _qspec_full_eigs(th, X, _rc_q)                                          # Q_r = Σ_k r_kQ_k — every eigenvalue, descending
+                        _h = _qspec_full_eigs(th, X, _ones_q)                                         # H = Σ_k Q_k
+                        g_qspec = {"mr": _mr, "h": _h, "p": p, "full": True}
+                    else:                                                                            # p too large / non-MLP ⇒ can't materialize p×p: sample top-qspeck ⊕ bottom-qspeck via Lanczos
+                        _mr = sorted((float(lam) for (lam, _v) in _eds_eigpairs(th, X, _rc_q, p, qspeck, Jc.dtype)), reverse=True)
+                        _h = sorted((float(lam) for (lam, _v) in _eds_eigpairs(th, X, _ones_q, p, qspeck, Jc.dtype)), reverse=True)
+                        g_qspec = {"mr": _mr, "h": _h, "k": qspeck, "p": p, "full": False}
                 except Exception:
                     g_qspec = None
 
@@ -5076,7 +6656,8 @@ def run_stream(P):
                 K12 = max(1, min(SEC12_KFULL, p // 2))          # top-/bottom-K12 eigenpairs (covers k=1,2,5,10,kfull)
                 m12 = min(p, max(6 * K12, 64))                  # Lanczos steps — enough to converge the K12-th eigenpair
                 seeds12 = [(0x5EC12 + i * 7919) & 0x7FFFFFFF for i in range(N)]
-                if arch == "mlp":
+                if arch == "mlp" and _qinit_active() is None:   # under a qinit override the fast torch.func HVP would
+                    # bypass the fix/random Q ⇒ use the hvpS per-sample path (below) instead, which honours _TL.qcfg
                     import torch.func as _tf
                     lbl12 = (Y.reshape(N, outD).argmax(dim=1) if outD > 1
                              else torch.zeros(N, dtype=torch.long, device=_dev()))
@@ -5288,7 +6869,7 @@ def run_stream(P):
 
             yield {
                 "type": "step", "t": t, "steps": steps, "p": p,
-                "loss": loss, "sharp": sharp,
+                "loss": loss, "sharp": sharp, "testloss": testloss,   # testloss overlays on the §1 loss plot (held-out set)
                 "thP": thPr, "thA": thAr, "thPpsd": thPpsdR, "thAH": thAH,
                 "thP_d": thPdR, "thPpsd_d": thPpsddR,
                 **cub,    # §10 cubic keys: c47/c47p, c51/c51p, c51n/c51np, cActN, cActH, cdQ, cdJ (when s17)
@@ -5314,7 +6895,18 @@ def run_stream(P):
                 "g26": g26,                                    # §26: eigenvector-direction drift |cos(v_i(t),v_i(t−k))| for GN/NTK/M_r top-3 (+M_r bottom-3)
                 "g_eds": g_eds,                                # EARLY-DYNAMICS STATS (s42): σ-weighted ±M_r Jᵀr projection sums + H/M_r eigenspace mean principal angles at lags {1,2,5,10}
                 "g_ss": g_ss,                                  # SELF-STABILIZATION (ss): cos(∇S,±ssk eigvecs of preconditioned Hessian H_P) [top/bot lists] + p3/p4 projected-gradient cosines
-                "g_qspec": g_qspec,                            # Q-SPECTRUM (qspec): per-iteration eigenspectra {mr:[...], h:[...]} of Q_r=Σr_kQ_k and H=ΣQ_k (top⊕bottom-qspeck eigenvalues, descending)
+                "g_qspec": g_qspec,                            # Q-SPECTRUM (qspec): eigenspectra {mr:[...], h:[...], p, full} of Q_r=Σr_kQ_k and H=ΣQ_k, descending. full=True ⇒ all p eigenvalues (MLP); full=False ⇒ top⊕bottom-qspeck
+                "g_s6fix": g_s6fix,                            # §6-FIXED-BASIS (s6f): curvature+alignment along the FROZEN init eigenbasis of M_r & GN {t,k,mr_curv,gn_curv,mr_align,gn_align,mr_lam0,gn_lam0}
+                "g_gw2": g_gw2,                                # ★grok-② (gw2): direction-change of top-3 Q_r eigvecs — {t,lags:[1,2,5],tau,cos:[[..]×3],count:[3]}
+                "g_gw3": g_gw3,                                # ★grok-③ (gw3): ALL §6 panels (NTK+M_r+GN, 3×4 bars) per Q-mode {ev,fx,rd,lr} + per-mode SLQ M_r spectrum
+                "g_gw4": g_gw4,                                # ★grok-④ (gw4): curvature-subspace persistence {t,k,thr,t0s,refs:{T0:{top_in,top_out,bot_in,bot_out,cap}}}
+                "g_gw1": g_gw1,                                # ★grok-① (gw1): one-shot init-scale sweep {t, pts:[{s,a1,a2,a3,dJ,col}]}
+                "g_gw5": g_gw5,                                # ★grok-⑤ Initialization sweep: {axis,layer,runs:[{x,it,ltr,lte,atr,ate,ps,align,ratio,grokIt}]}
+                "g_gw6": g_gw6,                                # ★grok-⑥ Output-scaling sweep (same run schema)
+                "g_gw7": g_gw7,                                # ★grok-⑦ Optimizer-λ sweep (rule/sign + run schema)
+                "g_gw8": g_gw8,                                # ★grok-⑧ Activation sweep (runs carry a 'name')
+                "g_gw9": g_gw9,                                # ★grok-⑨ random-search-on-M_r-subspace vs GD baseline (2 named runs)
+                "g_gw10": g_gw10,                             # ★grok-⑩ subspace-traversal random-search on Qr (top/bottom/null/random-K) × k∈{1,3,5}
                 "g27": g27,                                    # §27: sliding-window 3D subspace projection of the six ∇θ gradient-vectors (50-step lag)
                 "g27x": g27x,                                  # §7 extra panel: per-step cosine similarities + norms of {∇‖g‖², g, ∇‖J‖², J·ṙ, J̇·r, ∇‖J̇‖²}
                 "g28": g28,                                    # §28: TIMESCALES — panel 1 (5 J/r rate ratios, exact) + panel 2 (5 Q-Hessian rate ratios, Hutchinson)
@@ -5334,10 +6926,10 @@ def run_stream(P):
                 ntr = max(nProbe, 4)   # Hutchinson trace probes (a few extra for a smoother trace curve)
                 yield {
                     "type": "slq", "t": t,
-                    "sH": slq_density(lambda v: hvpF(th, X, v), p, nProbe, mSLQ, 80, 0x11),
-                    "sG": slq_density(lambda v: hvpG(th, X, v), p, nProbe, mSLQ, 80, 0x22),
-                    "sS": slq_density(lambda v: hvpS(th, X, v, cS), p, nProbe, mSLQ, 80, 0x33),
-                    "sHL": slq_density(lambda v: hvpL(th, X, Y, v), p, nProbe, mSLQ, 80, 0x44),
+                    "sH": slq_density(lambda v: hvpF(th, X, v), p, nProbe, mSLQ, 80, 0x11, slqBlock),
+                    "sG": slq_density(lambda v: hvpG(th, X, v), p, nProbe, mSLQ, 80, 0x22, slqBlock),
+                    "sS": slq_density(lambda v: hvpS(th, X, v, cS), p, nProbe, mSLQ, 80, 0x33, slqBlock),
+                    "sHL": slq_density(lambda v: hvpL(th, X, Y, v), p, nProbe, mSLQ, 80, 0x44, slqBlock),
                     # trace of each operator vs iteration (Hutchinson). H is ÷N → per-sample scale (matches §1).
                     "trH": _hutch_trace(lambda v: hvpF(th, X, v), p, ntr, 0x51) / N,
                     "trG": _hutch_trace(lambda v: hvpG(th, X, v), p, ntr, 0x52),
@@ -5411,6 +7003,7 @@ def run_surrogate_compare(P):
     Hessian uses the matching Gauss–Newton metric. The §9 σ₁ theory is squared-loss only (skipped for CE).
     Panels: loss, residual mean/std, top-n loss-Hessian eigenvalues, residual histogram, §9 theory σ₁,
     §4 and §4d projections."""
+    _TL.qcfg = None   # qinit is scoped to run_stream only; clear any stale qcfg so a shared-thread caller can't leak a fix/random Q into this surrogate-compare run
     kind = P.get("surrogate", "quad")
     dataset = P.get("dataset", "synthetic")
     arch = P.get("arch", "mlp")
@@ -5450,6 +7043,8 @@ def run_surrogate_compare(P):
         inDimE, outDimE = max(2, int(P["indim"])), 1
     elif dataset == "agf":
         inDimE, outDimE = int(P["indim"]), 1
+    elif dataset == "iclreg":
+        inDimE = (int(P["indim"]) + 1) * (int(P["seqlen"]) + 1); outDimE = 1   # ICL prompt (D+1)(N+1) flattened (mirror run_stream)
     else:
         inDimE, outDimE = P["indim"], P["outdim"]
     _TL.model = build_model(arch, inDimE, outDimE, P)
@@ -5890,12 +7485,19 @@ def _parse_params(q):
         "lr": ff("lr", 0.36), "init": ff("init", 0.4),
         "nsamp": fi("nsamp", 1), "batch": fi("batch", 0), "indim": fi("indim", 1), "outdim": fi("outdim", 1),
         "tgt": ff("tgt", 1.0), "neig": fi("neig", 3), "kth": fi("kth", 1),
-        "steps": fi("steps", 400), "eigevery": fi("eigevery", 1), "slqevery": max(1, fi("slqevery", 10)),
+        "steps": fi("steps", 400), "eigevery": fi("eigevery", 1), "slqevery": max(1, fi("slqevery", 5)),
         "heavyevery": max(1, fi("heavyevery", 4)),   # cadence for the heaviest panels §7-proj/§8 (keeps runs responsive)
-        "slqprobes": fi("slqprobes", 4), "energyp": ff("energyp", 99),
+        "slqprobes": fi("slqprobes", 4), "slqblock": max(1, fi("slqblock", 4)),   # slqblock: SLQ block size (DEFAULT 4 = block SLQ, validated sweet spot; 1 = standard single-vector SLQ)
+        "energyp": ff("energyp", 99),
         "seed": fi("seed", 0), "start": fi("start", 0), "inputstd": ff("inputstd", 1.0),
         "ssign": g("ssign", "off"), "optimizer": g("optimizer", "gd"), "qapprox": max(1, fi("qapprox", 25)),
         "qmode": max(1, fi("qmode", 1)), "tset": max(1, fi("tset", 3)),
+        # qinit: GLOBAL function-Hessian-Q toggle for the prediction trackers (see _qcfg_setup / jac_hvp).
+        "qinit": g("qinit", "evolve"),          # evolve | fix | gauss | bern | unif
+        "qfixt": max(0, fi("qfixt", 0)),        # fix/random: iteration t at which Q is frozen (default 0 = θ₀)
+        "qseed": fi("qseed", 0),                # random-Q RNG seed
+        "qprobes": max(1, fi("qprobes", 8)),    # random-Q: # Hutchinson probes for the per-sample Frobenius match
+        "qrandcap": ff("qrandcap", 2e8),        # random-Q size guard on M·p² (dense (M,p,p) tensor); over ⇒ fall back to evolve
         "cubicapprox": max(1, fi("cubicapprox", 10)),   # §10 cubic-approximation window length
         "dataset": g("dataset", "synthetic"), "arch": g("arch", "mlp"), "loss": g("loss", "mse"),
         "chmul": ff("chmul", 0.25), "nlayer": fi("nlayer", 2), "nhead": fi("nhead", 4),
@@ -5919,7 +7521,11 @@ def _parse_params(q):
         "swstdmin": ff("swstdmin", 0.0), "swstdmax": ff("swstdmax", 0.0),
         "swsumn": fi("swsumn", 20), "swsumn2": fi("swsumn2", 20),   # prediction-2/2b: sum windows N / N₂ (must be in P so the query values reach run_sweep)
         "swmrk": fi("swmrk", 10),       # prediction-2c/2d: k for the (Σ top-k)+(Σ bottom-k) eigenvalue sum of Qr
-        "swcsmin": ff("swcsmin", 0.1), "swcsmax": ff("swcsmax", 10.0),   # prediction-2c/2d DEDICATED σ-sweep range (init scale, log-spaced)
+        "swcsmin": ff("swcsmin", 0.1), "swcsmax": ff("swcsmax", 10.0),   # prediction-2c/2d DEDICATED σ-sweep range — σ = init-scale FACTOR ×standard init (1=standard), log-spaced
+        "sw2lr": ff("sw2lr", 1e-7),      # prediction-2c/2d/2e: lookahead lr for scaling-factor σ≥1 (default 1e-7 ⇒ tiny, avoids the catapult at the high-sharpness large inits)
+        "sw2lrlo": ff("sw2lrlo", 1e-3),  # prediction-2c/2d/2e: lookahead lr for scaling-factor σ<1 (default 1e-3 ⇒ small inits have low sharpness, a larger lr is safe & fp32-clean)
+        "swMmax": fi("swMmax", 400),     # sweep size cap on M=N·outD (default 400; raise for big-batch captures on long jobs)
+        "swMPmax": ff("swMPmax", 2e8),   # sweep size cap on M·p (default 2e8; raise for big-batch captures)
         "sw2cd": g("sw2cd", "0") == "1",   # prediction-2c/2d gate: only run the dedicated σ-loop (plots 4-5) when ON (OFF by default ⇒ not computed)
         "sw2e": g("sw2e", "0") == "1",     # prediction-2e gate: full-operator gᵀM_r g vs Δ‖J‖ (plot 6), independent toggle, OFF by default
         "swps5n": max(1, fi("swps5n", 4)),   # prediction-5 (magnified PS): #frozen-Q,J / evolving-r steps to sum u₁ᵀ(QJr)v₁ over (default 4)
@@ -5977,8 +7583,42 @@ def _parse_params(q):
         "s42": g("s42", "0") == "1",     # EARLY-DYNAMICS STATS panel (not a prediction): σ-weighted ±M_r Jᵀr projection + H/M_r eigenspace principal angles
         "ss": g("ss", "0") == "1",       # SELF-STABILIZATION panel (not a prediction): cos(∇S, ±k eigvecs of preconditioned Hessian H_P) + 2 projected-gradient cosines
         "ssk": fi("ssk", 5),             # self-stabilization: # top/bottom eigenvectors of H_P (default 5)
-        "qspec": g("qspec", "0") == "1", # Q-SPECTRUM panel (not a prediction): per-iteration eigenspectra of Q_r=Σ_k r_kQ_k and H=Σ_k Q_k (scree + scrubber)
-        "qspeck": fi("qspeck", 40),      # Q-spectrum: # top ⊕ bottom eigenvalues per iteration (default 40)
+        "s6f": g("s6f", "0") == "1",     # §6 FIXED-BASIS panel (not a prediction): §6 phases along the frozen init eigenbasis of M_r & GN (ranking fixed at init) — how each direction is learned
+        "gw2": g("gw2", "0") == "1",     # ★grok-② direction-change of top-3 Q_r eigenvectors (cos-lags 1/2/5 + τ-crossing switch counter)
+        "gw2tau": float(g("gw2tau", "0.7")),  # ★grok-② τ threshold for the switch counter
+        "gw3": g("gw3", "0") == "1",     # ★grok-③ §6 phases under {evolving, init-fixed, random, random-low-rank} Q + per-mode SLQ M_r spectrum
+        "gw3rank": int(g("gw3rank", "4")), "gw3k": int(g("gw3k", "20")),    # ★grok-③ rank r of random-low-rank Q + §6 top/bot-K
+        "gw3full": g("gw3full", "0") == "1",  # ★grok-③ low-rank build: matched-spectrum (0) vs fully-random (1)
+        "gw4": g("gw4", "0") == "1",     # ★grok-④ high-curvature-direction analysis (can-lower-loss / learned / new / relate-to-J)
+        "gw4K": int(g("gw4K", "15")),     # ★grok-④ k = # top (and bottom) M_r directions
+        "gw4thr": float(g("gw4thr", "0.5")), "gw4t0s": g("gw4t0s", "0,25,50,100"),   # ★grok-④ span threshold + reference iters T₀
+        "gw4tau": float(g("gw4tau", "0.1")),  # ★grok-④ gradient-alignment threshold
+        "gw1": g("gw1", "0") == "1",     # ★grok-① one-shot init-scale sweep (Δ‖J‖ vs NTK-alignment, colored by |gᵀM_rg|−|gᵀJᵀJg|)
+        "gw1n": int(g("gw1n", "100")), "gw1steps": int(g("gw1steps", "4")),  # ★grok-① # σ points, # GD steps
+        # ---- page-1 INTERVENTION experiments (one-shot live sweeps) ----
+        "gw5": g("gw5", "0") == "1",     # ★grok-⑤ Initialization sweep
+        "gw5layer": g("gw5layer", "all"), "gw5lrscale": g("gw5lrscale", "1"), "gw5lrref": float(g("gw5lrref", "1.0")), "gw5lrpow": float(g("gw5lrpow", "0.5")),   # ⑤ scale "all"/"last" layer + per-σ lr∝(σ_ref/σ)^pow (default √) toggle + reference σ
+        "gw6": g("gw6", "0") == "1",     # ★grok-⑥ Output-scaling sweep
+        "gw6mode": g("gw6mode", "init"), "gw6arange": float(g("gw6arange", "4.0")),   # ⑥ "init"/"interval" + α range factor (α∈[1/f,f])
+        "gw7": g("gw7", "0") == "1",     # ★grok-⑦ Optimizer-λ sweep
+        "gw7rule": g("gw7rule", "star"), "gw7sign": g("gw7sign", "plus"), "gw7lammax": float(g("gw7lammax", "10.0")),   # ⑦ rule (DEFAULT taylor / star) + ± sign + λ-sweep upper end
+        "gw7sweep": g("gw7sweep", "mr"), "gw7lam1": float(g("gw7lam1", "1.0")), "gw7lam2": float(g("gw7lam2", "0.0")),   # ⑦ sweep mode DEFAULT mr = λ₂ only (M_r), λ₁ fixed=1 — also bias/gn/both + fixed λ₁ (JᵀJ) / λ₂ (M_r)
+        "gw7schedsafety": float(g("gw7schedsafety", "0.9")),   # ⑦ negative-λ anti-self-stabilization lr schedule: keep σ·η = safety·2 below the EoS (2)
+
+        "gw8": g("gw8", "0") == "1",     # ★grok-⑧ Activation sweep
+        "gw9": g("gw9", "0") == "1",     # ★grok-⑨ random-search on the top-M_r subspace
+        "gw9K": int(g("gw9K", "8")), "gw9refresh": int(g("gw9refresh", "20")), "gw9try": int(g("gw9try", "8")), "gw9thr": float(g("gw9thr", "0.0")),
+        "gw10": g("gw10", "0") == "1",   # ★grok-⑩ subspace-traversal random-search on Qr (top/bottom/null/random-K), step maximizes rᵀf (no gradient), k∈{1,3,5}
+        "gw10try": int(g("gw10try", "16")), "gw10init": float(g("gw10init", "1.0")),
+        "gw6init": float(g("gw6init", "1.0")), "gw7init": float(g("gw7init", "1.0")), "gw8init": float(g("gw8init", "1.0")), "gw9init": float(g("gw9init", "1.0")), "gwdiaginit": float(g("gwdiaginit", "1.0")),   # ★grok init-scale controls default 1 = MAIN run's init (tied to main run)
+        "gw_n": int(g("gw_n", "6")), "gw_steps": int(g("gw_steps", "500")),  # shared: # sweep points, # GD steps/run
+        "gw_ev": int(g("gw_ev", "20")), "gw_nsamp": int(g("gw_nsamp", "500")), "gw_nte": int(g("gw_nte", "200")),    # shared: diag stride, TRAIN + held-out sizes
+        "gw_batch": int(g("gw_batch", "0")),    # ★grok-⑤–⑨ minibatch size for the intervention UPDATE (0 = full batch)
+        "s6fk": fi("s6fk", 16),          # §6-fixed-basis: # of top init-directions per operator
+        "s6fevery": fi("s6fevery", 0),   # §6-fixed-basis throttle (0 ⇒ auto ≈80 snapshots)
+        "qspec": g("qspec", "0") == "1", # Q-SPECTRUM panel (not a prediction): eigenspectra of Q_r=Σ_k r_kQ_k and H=Σ_k Q_k over training (FULL spectrum for MLP p≤20000; scree + scrubber)
+        "qspeck": fi("qspeck", 40),      # Q-spectrum FALLBACK top⊕bottom count (non-MLP / p>20000 only)
+        "qspecevery": fi("qspecevery", 5), # Q-spectrum throttle: full spectrum every Nth step (default 5; 0 ⇒ auto ≈60 snapshots) — the full p×p eig is heavy, so it is NOT computed every step
         "edsmrk": fi("edsmrk", 50),      # early-dynamics plot 1: top-K ⊕ bottom-K M_r eigenpairs
         "edsangk": fi("edsangk", 10),    # early-dynamics plots 2-5: principal-angle eigenspace dimension
         "s38": g("s38", "0") == "1",     # prediction-5: trace-statistic Tr(NTK) prediction (prediction widget)
@@ -6115,6 +7755,10 @@ def run_sweep(P):
               refrozen every K steps (censored),
       startDiff = d at step 0,  curv = peak signed d²loss/dt² (the max-|·| central 2nd difference of loss(t)).
     Streams one point per pair on the fly (may be slow; the page plots as they arrive). Prediction widget only."""
+    _TL.qcfg = None   # the qinit toggle is scoped to run_stream's trackers ONLY. The capture path calls run_stream
+                      #   (which may set a fix/random _TL.qcfg) then run_sweep on the SAME thread — without this reset
+                      #   the sweep's per-trajectory hvpS/jac_hvp would inherit the main run's substituted Q (wrong θ_t,
+                      #   applied to the sweep's DIFFERENT (lr,init) trajectories). Sweep always uses the TRUE Q.
     dataset = P.get("dataset", "synthetic"); arch = P.get("arch", "mlp")
     if dataset in ("chebyshev", "chebyshev2"):
         inD = outD = 1
@@ -6126,6 +7770,10 @@ def run_sweep(P):
         inD = outD = max(2, int(P.get("indim", 10)))                 # d-class argmax finder — DERIVED dims (mirror run_stream), not raw indim/outdim
     elif dataset == "modadd":
         _mm = max(2, int(P.get("outdim", 11))); inD, outD = 2 * _mm, _mm   # (a+b) mod m: 2m in, m out (mirror run_stream)
+    elif dataset == "ksparse":
+        inD, outD = int(P.get("indim", 10)), 1                        # k-sparse parity: n bits in → SCALAR ±1 out. run_stream FORCES outD=1;
+                                                                      #   run_sweep was MISSING this branch ⇒ fell to the else with P["outdim"] (10 by
+                                                                      #   default) ⇒ M=N·10, f0 size 1000 vs Yf size 100 in _pred_signchange → crash.
     else:
         inD, outD = int(P.get("indim", 10)), int(P.get("outdim", 1))
     _TL.model = build_model(arch, inD, outD, P)
@@ -6134,8 +7782,9 @@ def run_sweep(P):
         yield {"type": "meta", "error": "sweep needs MSE loss (the ‖J·ṙ‖−‖J̇·r‖ theory is for squared loss)."}
         return
     p = _TL.model.p; N = int(P["nsamp"]); M = N * outD
-    if M > 400 or M * p > 200_000_000:
-        yield {"type": "meta", "error": f"sweep too large (M={M}, p={p}); use a small MLP + small nsamp."}
+    _swMmax = int(P.get("swMmax", 400)); _swMPmax = int(float(P.get("swMPmax", 2e8)))   # sweep size caps (the sweep trains ~npairs mini-nets, so it's expensive at large M·p) — raise via --set swMmax / --set swMPmax for big-batch captures on a long job
+    if M > _swMmax or M * p > _swMPmax:
+        yield {"type": "meta", "error": f"sweep too large (M={M}, p={p}); raise swMmax/swMPmax or use a smaller MLP/nsamp."}
         return
     steps = max(5, int(P.get("steps", 200)))
     npairs = max(1, min(200, int(P.get("swpairs", 100))))
@@ -6175,8 +7824,9 @@ def run_sweep(P):
             return float(_mu[-_ke:].sum()) + float(_mu[:_ke].sum())   # Σ(top-k, most positive) + Σ(bottom-k, most negative) — signed net-extreme over 2k modes
         except Exception:
             return None
-    # ── Prediction-2c/2d/2e (plots 4-5-6): DEDICATED σ-sweep — σ log-spaced over [swcsmin, swcsmax] (default 0.1→10),
-    #    decoupled from the (lr,σ) pairs below. Per init scale σ, at t=0 we measure how much the residual-contracted
+    # ── Prediction-2c/2d/2e (plots 4-5-6): DEDICATED σ-sweep — σ = the SCALING FACTOR on the standard-init std
+    #    (σ=1 ⇒ standard parameterization; θ = σ · θ_standard, weights only), log-spaced over [swcsmin, swcsmax] (default
+    #    0.1→10), decoupled from the (lr,σ) pairs below. Per scaling factor σ, at t=0 we measure how much the residual-contracted
     #    gradient g=Jᵀr aligns with the POSITIVE- vs NEGATIVE-curvature of M_r=Σ_k r_kQ_k, and pair that against the
     #    SHORT-HORIZON change in ‖J‖_F over l GD steps from that init. (σ_i,u_i)=top-k⊕bottom-k eigenpairs of M_r (RAW):
     #      A± = Σ_{σ_i≷0} σ_i·(u_iᵀg)² / ‖g‖²                       (curvature-sign-split gradient alignment; the projection
@@ -6186,24 +7836,31 @@ def run_sweep(P):
     #      plot-2c:  x = A₊ − A₋,               y = ‖J_l‖ − ‖J₀‖
     #      plot-2d:  x = (A₊−A₋)/(A₊+A₋),       y = (‖J_l‖ − ‖J₀‖)/(‖J₀‖+ε)
     #      plot-2e:  x = gᵀM_r g = (Jᵀr)ᵀ M_r (Jᵀr)  [FULL operator via one hvpS, NOT restricted to ±k], y = ‖J_l‖ − ‖J₀‖
-    #    Off by default: 2c/2d gated by sw2cd, 2e gated independently by sw2e. l = swjl (default 4, k0=0); l GD steps use
-    #    the config lr. Streamed first so 4-6 fill promptly. The σ-loop runs when EITHER toggle is on.
+    #    Off by default: 2c/2d gated by sw2cd, 2e gated independently by sw2e. l = swjl (default 4, k0=0); the l GD steps use a
+    #    DEDICATED σ-DEPENDENT lookahead lr (NOT the config lr): scaling-factor σ<1 ⇒ sw2lrlo (1e-3), σ≥1 ⇒ sw2lr (1e-7) — so the
+    #    short-horizon Δ‖J‖ stays LINEAR and never catapults (tiny lr where the large inits are high-sharpness). For MLPs the whole
+    #    σ-loop runs in fp64 (else the 1e-7 step is below fp32 precision). Streamed first so 4-6 fill promptly; runs when EITHER toggle is on.
     _sw2cd = bool(P.get("sw2cd", False))                                   # gate: plots 4-5 OFF by default
     _sw2e = bool(P.get("sw2e", False))                                     # gate: plot 6 (2e) OFF by default — independent toggle
     _lo, _hi = _math.log(swcsmin), _math.log(swcsmax)
-    _lgd = float(P.get("lr", 0.05)); _ljl = max(1, int(P.get("swjl", 4))); _EPS2D = 1e-12   # GD lr, lookahead l (k0=0), 2d denominator ε
+    _lgd_hi = float(P.get("sw2lr", 1e-7)); _lgd_lo = float(P.get("sw2lrlo", 1e-3))   # 2c/2d/2e lookahead lr, σ-DEPENDENT: σ<1 ⇒ sw2lrlo (1e-3; small init ⇒ low sharpness ⇒ fp32-clean), σ≥1 ⇒ sw2lr (1e-7; large init ⇒ high sharpness ⇒ tiny lr avoids the catapult)
+    _ljl = max(1, int(P.get("swjl", 4))); _EPS2D = 1e-12                    # lookahead l (k0=0), 2d denominator ε
+    _u64 = isinstance(_TL.model, MlpModel)                                 # MLP: run the σ-loop in fp64 — at lr=1e-7 the Δθ (~1e-7·g) is below fp32 precision, so the Δ‖J‖ y-value would be fp32 rounding NOISE on the GPU. (non-MLP keeps native dtype.)
+    _Xw = X.double() if _u64 else X; _Yw = Y.double() if _u64 else Y
     for si in range(npairs if (_sw2cd or _sw2e) else 0):                   # range(0) ⇒ skip entirely (nothing streamed/computed) when BOTH toggles are off
-        std_c = _math.exp(_lo + (_hi - _lo) * (si / max(1, npairs - 1)))   # deterministic log-spaced σ grid 0.1 → 10
-        th_c = _TL.model.init_theta(seed0 + 1, std_c)
-        out_c = _TL.model.forward(th_c, X)
-        if not (float(_TL.loss.value(out_c, Y, N)) < 1e12):
+        sig_c = _math.exp(_lo + (_hi - _lo) * (si / max(1, npairs - 1)))   # deterministic log-spaced grid: σ = SCALING FACTOR on the standard-init std (σ=1 ⇒ standard parameterization), 0.1 → 10
+        _lgd = _lgd_lo if sig_c < 1.0 else _lgd_hi                          # σ-dependent lookahead lr (split at σ=1)
+        th_c = sig_c * _TL.model.init_theta(seed0 + 1, 1.0)                # standard/canonical init (initScale=1: mup/kaiming use their canonical variance, default⇒1/√fan_in, custom⇒1) THEN scaled by σ. Biases/gains are 0 at init for the MSE sweep archs (mlp/cnn/vgg) ⇒ σ multiplies the WEIGHT std uniformly for EVERY scheme (fixes mup/kaiming, which used to ignore the init-scale entirely so every σ gave the same net).
+        if _u64: th_c = th_c.double()                                      # fp64 for the whole σ-point (θ update at lr=1e-7 needs > fp32 precision)
+        out_c = _TL.model.forward(th_c, _Xw)
+        if not (float(_TL.loss.value(out_c, _Yw, N)) < 1e12):
             continue                                                       # skip a NaN/blow-up init (rare at large σ)
-        rr_c = (-N * _TL.loss.resid_cotangent(out_c.reshape(N, outD), Y, N)).reshape(-1)[:M]   # r = y − f
-        Jc0, _ = jac_cols(th_c, X); Jm0 = Jc0[:M]; j0 = float(Jm0.norm())                      # J at init (M×p); ‖J₀‖_F
+        rr_c = (-N * _TL.loss.resid_cotangent(out_c.reshape(N, outD), _Yw, N)).reshape(-1)[:M]   # r = y − f
+        Jc0, _ = jac_cols(th_c, _Xw); Jm0 = Jc0[:M]; j0 = float(Jm0.norm())                    # J at init (M×p); ‖J₀‖_F
         g = Jm0.t() @ rr_c; gn = max(float(g.norm()), 1e-30); g2 = gn * gn                     # g = Jᵀr (residual-contracted gradient, p); ‖g‖, ‖g‖²
         xdiff = xnorm = None
         if _sw2cd:                                                         # 2c/2d: eigenspace-restricted squared-projection Rayleigh
-            pairs = _eds_eigpairs(th_c, X, rr_c.reshape(N, outD), p, swmrk, th_c.dtype)        # (σ_i,u_i) of M_r=Σ_k r_kQ_k (top-k ⊕ bottom-k)
+            pairs = _eds_eigpairs(th_c, _Xw, rr_c.reshape(N, outD), p, swmrk, th_c.dtype)      # (σ_i,u_i) of M_r=Σ_k r_kQ_k (top-k ⊕ bottom-k)
             Ap = sum(lam * (float(u @ g) ** 2) for (lam, u) in pairs if lam > 0) / g2          # A₊ = Σ_{σ_i>0} σ_i·(u_iᵀg)² / ‖g‖²  (≥0)
             An = sum(-lam * (float(u @ g) ** 2) for (lam, u) in pairs if lam < 0) / g2         # A₋ = Σ_{σ_i<0} |σ_i|·(u_iᵀg)² / ‖g‖²  (≥0; squared ⇒ gauge-invariant)
             xden = Ap + An
@@ -6211,21 +7868,21 @@ def run_sweep(P):
             xnorm = (xdiff / xden) if xden > 1e-30 else 0.0               # 2d x: (A₊−A₋)/(A₊+A₋)
         x2e = None
         if _sw2e:                                                          # 2e: FULL-operator quadratic form gᵀM_r g (one HVP, no eigendecomposition)
-            Mr_g = hvpS(th_c, X, g, rr_c.reshape(N, outD))                 # M_r·g = (Σ_k r_kQ_k) g
+            Mr_g = hvpS(th_c, _Xw, g, rr_c.reshape(N, outD))              # M_r·g = (Σ_k r_kQ_k) g
             _x2e = float(g @ Mr_g)                                         # x = gᵀ M_r g = (Jᵀr)ᵀ M_r (Jᵀr)
             x2e = _x2e if _x2e == _x2e else None
-        th_g = th_c.clone(); ok = True                                     # y: short-horizon Δ‖J‖_F over l GD steps from this init (config lr) — SHARED by 2c and 2e
+        th_g = th_c.clone(); ok = True                                     # y: short-horizon Δ‖J‖_F over l GD steps from this init (σ-dependent tiny lr) — SHARED by 2c and 2e
         for _ in range(_ljl):
-            _og = _TL.model.forward(th_g, X)
-            if not (float(_TL.loss.value(_og, Y, N)) < 1e12):
+            _og = _TL.model.forward(th_g, _Xw)
+            if not (float(_TL.loss.value(_og, _Yw, N)) < 1e12):
                 ok = False; break                                         # diverged within l steps ⇒ no y for this σ
-            th_g = th_g - _lgd * gradL(th_g, X, Y)[0]
+            th_g = th_g - _lgd * gradL(th_g, _Xw, _Yw)[0]
         dj = djn = None
         if ok:
-            Jcl, _ = jac_cols(th_g, X); jl = float(Jcl[:M].norm())        # ‖J_l‖_F
+            Jcl, _ = jac_cols(th_g, _Xw); jl = float(Jcl[:M].norm())      # ‖J_l‖_F
             if jl == jl:
                 dj = jl - j0; djn = (jl - j0) / (j0 + _EPS2D)
-        yield {"type": "sweeppt2c", "i": si, "std": float(std_c),
+        yield {"type": "sweeppt2c", "i": si, "std": float(sig_c),   # "std" = the σ SCALING FACTOR (×standard init; 1 ⇒ standard parameterization), NOT an absolute std
                "xdiff": (xdiff if (xdiff is not None and xdiff == xdiff) else None),   # 2c x-axis: A₊ − A₋ (squared-projection Rayleigh)
                "xnorm": (xnorm if (xnorm is not None and xnorm == xnorm) else None),   # 2d x-axis: (A₊−A₋)/(A₊+A₋)
                "x2e": x2e,                                                # 2e x-axis: gᵀM_r g (full operator)
@@ -6339,6 +7996,8 @@ class Handler(BaseHTTPRequestHandler):
             self._static("/eos_widget_prediction/index_prediction.html")   # ROOT + /prediction BOTH serve the prediction widget, so anyone who follows the README (or just opens the port) lands on the prediction widget by default
         elif u.path in ("/prediction_multiclass", "/prediction_multiclass/", "/multiclass", "/mc"):
             self._static("/eos_widget_prediction/index_prediction_multiclass.html")   # the MULTICLASS prediction widget: same panels, nd-flattened (M=n·d) multiclass datasets (CIFAR-10, MNIST-10, max-finder, modulo); CE + Fisher curvature
+        elif u.path in ("/prediction_detailed", "/prediction_detailed/", "/detailed", "/mcd"):
+            self._static("/eos_widget_prediction/index_prediction_detailed.html")   # the DETAILED prediction widget (single- + multi-class): the widget + the ★grok panels (diagnostics gw1-4 + page-1 interventions gw5-8) for the ratio→PS→alignment→grokking study. Kept separate so the plain widgets stay pristine.
         elif u.path in ("/original", "/original/", "/orig", "/widget"):
             self._static("/index.html")   # the ORIGINAL §1-§28 widget (browser or GPU backend via the Compute dropdown); relative /run + /captures ⇒ same-origin, so it just works from the fleet
         else:
