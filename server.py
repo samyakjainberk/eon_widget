@@ -4833,7 +4833,7 @@ def run_stream(P):
     s30t = max(0, int(P.get("s30t", 0)))      # §22: iteration t at which to freeze the 2nd-order Taylor (θ_t, J_t, Q_t)
     s31r = max(1, int(P.get("s31r", 200)))    # §23: rank R of the random symmetric function Hessian
     s31scale = float(P.get("s31scale", 1.0))  # §23: random-Hessian spectral norm = (real function-Hessian λmax at θ₀)·s31scale
-    grid3dcap = max(1, P.get("grid3dcap", 30))
+    grid3dcap = max(1, P.get("grid3dcap", 11000))
     sec12ncap = max(1, P.get("sec12ncap", 500))    # §12 sample cap (gates N). NOTE: §12 builds dense p×p Hessians
                                                     # (p HVPs + O(p³) eig per sample) → large p is SLOW; keep models small.
     if _TL.loss.name == "ce":            # CE: §7/§7a/§8/§4b/§4c use the function NTK (Jᵤ·Jᵤᵀ) and the generic
@@ -7836,7 +7836,7 @@ def _parse_params(q):
         "s30t": max(0, fi("s30t", 0)),   # §22: freeze iteration t
         "s31r": max(1, fi("s31r", 200)), # §23: rank R of the random function Hessian
         "s31scale": ff("s31scale", 1.0), # §23: random-Hessian spectral-norm scale (× real fn-Hessian λmax)
-        "grid3dcap": max(1, fi("grid3dcap", 500)),
+        "grid3dcap": max(1, fi("grid3dcap", 11000)),
         "sec12ncap": max(1, fi("sec12ncap", 500)),
         "cubeevery": max(1, fi("cubeevery", 1)),   # §11-§14 (3D-grid/cube + per-sample) snapshot cadence: emit every k-th eig-tick.
                                                    #   1 = every tick (default); raise it (e.g. 8) to keep long all-sections captures small (the
