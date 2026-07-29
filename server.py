@@ -4386,7 +4386,7 @@ def _topk_align(hvp, dim, vec, kk=4, seed=0x51A9):
     return out
 
 
-def _gw3p0_ops(mode, th_ref, X, N, outD, seed, lr_rank):
+def _gw3p0_ops(mode, th_ref, X, N, outD, seed, lr_rank, lr_decay=0.5):
     """Order-2 quadratic-surrogate operators at reference θ_ref (VALIDATED: f̂=f₀+J₀δ+½δᵀQₖδ,
     ∇L̂=−(1/N)(J₀ᵀr̂+M_r̂δ)). Q per mode: evolve/fix = true Φ(θ_ref); rand = iid-Gaussian per-output (shared
     fallback if the (M,p,p) tensor won't fit); lowrank = shared basis U(p×r) + per-output diagonals D ⇒
@@ -4413,9 +4413,14 @@ def _gw3p0_ops(mode, th_ref, X, N, outD, seed, lr_rank):
         g = torch.Generator(device=_dev()); g.manual_seed((int(seed) ^ 0x10CA1) & 0x7FFFFFFF)
         U, _ = torch.linalg.qr(torch.randn(p, r, generator=g, dtype=DTYPE, device=_dev()))
         D = torch.randn(M, r, generator=g, dtype=DTYPE, device=_dev())
+        # ★ SKEWED spectrum: scale mode i by decay^i (lr_decay<1) so Q_r=Σ_a r_aQ_a = U·diag(Σ_a r_a D_a)·Uᵀ has
+        #   only the top-few (and, after ± residual weighting, bottom-few) eigenvalues large, the rest decaying to
+        #   ~0 fast — a genuinely "low-rank"-LOOKING spectrum (was iid-Gaussian D ⇒ ~uniform |eig| across the r modes).
+        _dec = max(1e-6, min(1.0, float(lr_decay)))
+        D = D * torch.tensor([_dec ** i for i in range(r)], dtype=DTYPE, device=_dev()).reshape(1, r)
         try:
             tf = _q_frozen_fro2(th_ref, X, M, 4, (int(seed) ^ 0x5F3759DF) & 0x7FFFFFFF)       # (M,) true ‖Qₖ‖²
-            D = D * (tf.clamp_min(0).sqrt() / (D ** 2).sum(1).clamp_min(1e-30).sqrt()).reshape(M, 1)
+            D = D * (tf.clamp_min(0).sqrt() / (D ** 2).sum(1).clamp_min(1e-30).sqrt()).reshape(M, 1)   # per-sample Frobenius match (scales each ROW uniformly ⇒ preserves the decay profile)
         except Exception: pass
         def Qz(z): ud = U.t() @ z; return (D * ud) @ U.t()                                    # (M,p)
         def Mc(v, c): return U @ ((D.t() @ c) * (U.t() @ v))                                  # (p,)
@@ -4423,7 +4428,7 @@ def _gw3p0_ops(mode, th_ref, X, N, outD, seed, lr_rank):
     return {"f0": f0, "jvp": jvp, "vjp": vjp, "Qz": Qz, "Mc": Mc, "quad": quad, "M": M, "p": p}
 
 
-def _gw3p0_iter(mode, th0, Xtr, Ytr, Xte, Yte, N, Nte, outD, steps, ev, lr, seed, reexp, lr_rank):
+def _gw3p0_iter(mode, th0, Xtr, Ytr, Xte, Yte, N, Nte, outD, steps, ev, lr, seed, reexp, lr_rank, lr_decay=0.5):
     """One Panel-0 run (generator; yields the growing rec). mode='true' trains the REAL net; else trains the
     quadratic surrogate (evolve re-expands the ENTIRE Taylor at θ_now every `reexp` steps; fix/rand/lowrank
     freeze Q). Records {it, ltr,lte,atr,ate, sharp=λmax(∇²L̂), qrTop/qrBot=Q_r extremes, hTop/hBot=ΣQ extremes}
@@ -4472,13 +4477,13 @@ def _gw3p0_iter(mode, th0, Xtr, Ytr, Xte, Yte, N, Nte, outD, steps, ev, lr, seed
         return
     # ---- surrogate modes ----
     ref = th0.detach().clone(); delta = torch.zeros_like(ref); _lr = lr; _Lmin = [None]   # _lr adapts down on divergence
-    ops = _gw3p0_ops(mode, ref, Xtr, N, outD, seed, lr_rank)
-    opste = _gw3p0_ops(mode, ref, Xte, Nte, outD, seed, lr_rank) if Xte is not None else None
+    ops = _gw3p0_ops(mode, ref, Xtr, N, outD, seed, lr_rank, lr_decay)
+    opste = _gw3p0_ops(mode, ref, Xte, Nte, outD, seed, lr_rank, lr_decay) if Xte is not None else None
     for t in range(steps + 1):
         if mode == "evolve" and t > 0 and reexp > 0 and (t % reexp == 0):     # re-do the ENTIRE Taylor at θ_now
             ref = (ref + delta).detach().clone(); delta = torch.zeros_like(ref)
-            ops = _gw3p0_ops(mode, ref, Xtr, N, outD, seed, lr_rank)
-            opste = _gw3p0_ops(mode, ref, Xte, Nte, outD, seed, lr_rank) if Xte is not None else None
+            ops = _gw3p0_ops(mode, ref, Xtr, N, outD, seed, lr_rank, lr_decay)
+            opste = _gw3p0_ops(mode, ref, Xte, Nte, outD, seed, lr_rank, lr_decay) if Xte is not None else None
         fhat = ops["f0"] + ops["jvp"](delta) + ops["quad"](delta); rhat = Ytrf - fhat
         if t % ev == 0 or t == steps:
             ltr = 0.5 * float((rhat ** 2).sum()) / N; atr = _bacc_vec(fhat, Ytrf, outD, N); lte = ate = None
@@ -4576,6 +4581,18 @@ def _grok_train_iter(th0, X, Y, Xte, Yte, steps, ev, N, Nte, outD, ce, step_fn, 
 
 def _gd_step(X, Y, lr):
     return lambda th: th - lr * _opt_dir(_TL.model, gradL(th, X, Y)[0], "gd")
+
+
+def _gd_step_ramp(X, Y, lr0, alpha, T):
+    """★grok-⑥ baseline: GD whose lr RAMPS additively over the run — lr_t = (1 + (α−1)·t/T)·lr₀, t = internal
+    step counter. Same schedule as the interval output-scaling (α_t: 1→α, equally spaced), so the 'lr-scaling'
+    baseline (unscaled targets, ramped lr) is the direct counterpart of the 'output-scaling' run (ramped targets)."""
+    st = {"t": 0}
+    def step(th):
+        a_t = 1.0 + (alpha - 1.0) * min(1.0, st["t"] / max(T, 1))
+        st["t"] += 1
+        return th - (a_t * lr0) * _opt_dir(_TL.model, gradL(th, X, Y)[0], "gd")
+    return step
 
 
 def _opt_step_star(X, Y, N, outD, lr, lam, sign):
@@ -4777,7 +4794,7 @@ def run_stream(P):
     gw5 = int(P.get("gw5", 0))                   # ★grok-⑤ Initialization: sweep init scale σ; decreasing σ ⇒ ratio↑ PS↑ align↑ ⇒ faster grokking
     gw5layer = P.get("gw5layer", "all")          # ★grok-⑤ scale the WHOLE model ("all") or only the LAST layer ("last")
     gw6 = int(P.get("gw6", 0))                   # ★grok-⑥ Output scaling: sweep output gain α (scale last-layer output)
-    gw6mode = P.get("gw6mode", "init")           # ★grok-⑥ apply α once at init ("init") or ramp every gw_int steps ("interval")
+    gw6mode = P.get("gw6mode", "interval")           # ★grok-⑥ apply α once at init ("init") or ramp every gw_int steps ("interval")
     gw7 = int(P.get("gw7", 0))                   # ★grok-⑦ Optimization: sweep λ in a modified update that up-weights |gᵀM_rg|
     gw7rule = P.get("gw7rule", "star")         # ★grok-⑦ DEFAULT "taylor" = θ−η∇L+η²λ₂M̄_r∇L−η²λ₁Ḡ∇L (per-sample ops) ; "star" = θ−η∇L±ηλ(∇LᵀM_r∇L/‖∇L‖²)∇L
     gw7sign = 1 if str(P.get("gw7sign", "plus")) in ("plus", "1", "+") else -1   # ★grok-⑦ ± sign for the star rule
@@ -5781,23 +5798,29 @@ def run_stream(P):
                     th0g = (gw6init * _th_init0).detach().clone()   # small init θ=gw6init·θ₀
                     _af = max(1.0001, float(P.get("gw6arange", 4.0)))            # α range factor: sweep is log-symmetric α ∈ [1/_af, _af] around 1 (widened default 4 ⇒ 0.25…4; was 0.5…2)
                     alpha = [float((1.0 / _af) * ((_af * _af) ** (i / (gw_n - 1)))) for i in range(gw_n)]   # target-label gain α ∈ [1/_af, _af]
-                    nIv = max(1, gw_steps // max(1, (gw_steps // 5)))              # ~5 ramp intervals over the run
-                    ivlen = max(1, gw_steps // 5)
                     _s6specs = []; _s6gens = []
                     for _j, a_ in enumerate(alpha):
-                        if gw6mode == "interval":                                 # ramp targets Y ← Y + fraction·Y₀ every ivlen steps, up to α·Y₀
-                            yscale = (lambda av: (lambda t: 1.0 + (av - 1.0) * (min(t // ivlen, nIv) / max(nIv, 1))))(a_)
+                        if gw6mode == "interval":                                 # ★ CONTINUOUS additive ramp α_t: 1→α over the WHOLE run, equally spaced ⇒ Y_t=(1+(α−1)·t/T)·Y₀, so by the END y=α·y₀
+                            yscale = (lambda av: (lambda t: 1.0 + (av - 1.0) * min(1.0, t / max(gw_steps, 1))))(a_)
                         else:                                                     # scale the targets once at init: Y ← α·Y₀ (constant)
                             yscale = (lambda av: (lambda t: av))(a_)
                         _s6gens.append(_grok_train_iter(th0g.detach().clone(), Xtr_g, Ytr_g, Xte_g, Yte_g, gw_steps, gw_ev, Ntr_g, Nte_g, outD, ce, None, yscale_fn=yscale, lr=lr,
                                           batch=gw_batch, bseed=int(P["seed"])))  # ⑥ minibatch handled internally (GD on the scaled minibatch targets)
                         _s6specs.append({"x": a_, "cidx": _j})                    # solid: scaled targets, base lr
-                        # BASELINE (same colour, DOTTED): UNSCALED targets but lr×α — tests whether output-scaling ≈ lr-scaling
-                        _lrb = lr * a_
+                        # BASELINE (same colour, DOTTED): UNSCALED targets but lr RAMPED the SAME way — lr_t=α_t·lr₀ (interval)
+                        #   or the constant lr·α (init) — so the lr-scaling baseline mirrors the output-scaling schedule exactly.
+                        if gw6mode == "interval":
+                            _bstep = _gd_step_ramp(Xtr_g, Ytr_g, lr, a_, gw_steps)
+                            _mkb = (lambda Xb, Yb, Nb, _a=a_: _gd_step_ramp(Xb, Yb, lr, _a, gw_steps))
+                            _bname = f"α={a_:.2g} · unscaled·lr_t=α_t·lr₀"
+                        else:
+                            _lrb = lr * a_
+                            _bstep = _gd_step(Xtr_g, Ytr_g, _lrb)
+                            _mkb = (lambda Xb, Yb, Nb, _l=_lrb: _gd_step(Xb, Yb, _l))
+                            _bname = f"α={a_:.2g} · unscaled·lr×α"
                         _s6gens.append(_grok_train_iter(th0g.detach().clone(), Xtr_g, Ytr_g, Xte_g, Yte_g, gw_steps, gw_ev, Ntr_g, Nte_g, outD, ce,
-                                            _gd_step(Xtr_g, Ytr_g, _lrb), batch=gw_batch, bseed=int(P["seed"]),
-                                            mk_step=(lambda Xb, Yb, Nb, _l=_lrb: _gd_step(Xb, Yb, _l))))
-                        _s6specs.append({"x": a_, "cidx": _j, "dash": "dot", "name": f"α={a_:.2g} · unscaled·lr×α"})
+                                            _bstep, batch=gw_batch, bseed=int(P["seed"]), mk_step=_mkb))
+                        _s6specs.append({"x": a_, "cidx": _j, "dash": "dot", "name": _bname})
                     def _build6(recs, _t=t):
                         return {"t": _t, "axis": "target-label gain α", "mode": gw6mode, "sigma": gw6init,
                                 "runs": [{**_s6specs[i], **(recs[i] or {})} for i in range(len(_s6specs))]}
@@ -5945,10 +5968,11 @@ def run_stream(P):
                 try:
                     _th0p = _th_init0.detach().clone()
                     _reexp = max(1, int(P.get("gw3p0reexp", 25))); _lrrank = max(2, int(P.get("gw3p0rank", 8)))
+                    _lrdecay = float(P.get("gw3p0lrdecay", 0.5))   # ★ low-rank-Q spectral decay: mode i scaled by decay^i ⇒ skewed (few large ± eigs, rest →0)
                     _p0specs = [("true", "true (no Taylor)"), ("evolve", f"evolving Q (re-expand/{_reexp})"),
                                 ("fix", "fixed-init Q"), ("rand", "random Q"), ("lowrank", "random low-rank Q")]
                     _p0gens = [_gw3p0_iter(md, _th0p.detach().clone(), X, Y, Xtest, Ytest, N, Ntest, outD,
-                                           gw_steps, gw_ev, lr, int(P["seed"]), _reexp, _lrrank) for md, _ in _p0specs]
+                                           gw_steps, gw_ev, lr, int(P["seed"]), _reexp, _lrrank, _lrdecay) for md, _ in _p0specs]
                     def _buildp0(recs, _t=t):
                         return {"t": _t, "runs": [{"mode": _p0specs[i][0], "name": _p0specs[i][1], **(recs[i] or {})} for i in range(len(_p0specs))]}
                     _gw_drivers["gw3p0"] = (_stream_runs(_p0gens, _buildp0, "gw3p0"), _buildp0)   # ★concurrency: register
@@ -7794,6 +7818,8 @@ def _parse_params(q):
         "gw3": g("gw3", "0") == "1",     # ★grok-③ §6 phases under {evolving, init-fixed, random, random-low-rank} Q + per-mode SLQ M_r spectrum
         "gw3rank": int(g("gw3rank", "4")), "gw3k": int(g("gw3k", "20")),    # ★grok-③ rank r of random-low-rank Q + §6 top/bot-K
         "gw3full": g("gw3full", "0") == "1",  # ★grok-③ low-rank build: matched-spectrum (0) vs fully-random (1)
+        "gw3p0rank": int(g("gw3p0rank", "8")), "gw3p0reexp": int(g("gw3p0reexp", "25")),   # ★Panel-0: low-rank Q rank + evolving-Q re-expand cadence
+        "gw3p0lrdecay": float(g("gw3p0lrdecay", "0.5")),   # ★Panel-0 random-low-rank Q spectral decay: mode i ∝ decay^i ⇒ skewed spectrum (few large ± eigs, rest →0). Smaller = more skewed.
         "gw4": g("gw4", "0") == "1",     # ★grok-④ high-curvature-direction analysis (can-lower-loss / learned / new / relate-to-J)
         "gw4K": int(g("gw4K", "15")),     # ★grok-④ k = # top (and bottom) M_r directions
         "gw4thr": float(g("gw4thr", "0.5")), "gw4t0s": g("gw4t0s", "0,25,50,100"),   # ★grok-④ span threshold + reference iters T₀
@@ -7804,7 +7830,7 @@ def _parse_params(q):
         "gw5": g("gw5", "0") == "1",     # ★grok-⑤ Initialization sweep
         "gw5layer": g("gw5layer", "all"), "gw5lrscale": g("gw5lrscale", "1"), "gw5lrref": float(g("gw5lrref", "1.0")), "gw5lrpow": float(g("gw5lrpow", "0.5")),   # ⑤ scale "all"/"last" layer + per-σ lr∝(σ_ref/σ)^pow (default √) toggle + reference σ
         "gw6": g("gw6", "0") == "1",     # ★grok-⑥ Output-scaling sweep
-        "gw6mode": g("gw6mode", "init"), "gw6arange": float(g("gw6arange", "4.0")),   # ⑥ "init"/"interval" + α range factor (α∈[1/f,f])
+        "gw6mode": g("gw6mode", "interval"), "gw6arange": float(g("gw6arange", "4.0")),   # ⑥ "init"/"interval" + α range factor (α∈[1/f,f])
         "gw7": g("gw7", "0") == "1",     # ★grok-⑦ Optimizer-λ sweep
         "gw7rule": g("gw7rule", "star"), "gw7sign": g("gw7sign", "plus"), "gw7lammax": float(g("gw7lammax", "0.2")),   # ⑦ rule (DEFAULT taylor / star) + ± sign + λ-sweep upper end
         "gw7sweep": g("gw7sweep", "mr"), "gw7lam1": float(g("gw7lam1", "1.0")), "gw7lam2": float(g("gw7lam2", "0.0")),   # ⑦ sweep mode DEFAULT mr = λ₂ only (M_r), λ₁ fixed=1 — also bias/gn/both + fixed λ₁ (JᵀJ) / λ₂ (M_r)
