@@ -768,7 +768,7 @@ Each line “$i\!\cdot\!j$” is $\cos\angle(\text{vector }i,\text{vector }j)\in
 
 <div id="sec_gw2" style="border:2px solid #be185d;border-radius:8px;padding:6px 14px 12px;margin:6px 0 18px;background:#fff1f7;display:none">
 <h2 style="color:#be185d;margin-top:4px">★grok-② · how many times each $Q_r$ direction changes <span id="gw2na" style="font-size:12px;color:#dc2626;font-weight:600;margin-left:6px"></span></h2>
-<p class="cap">The top-3 eigenvectors of $M_r=Q_r=\sum_k r_kQ_k$, each followed as a <b>continuous mode</b> (matched to the previous step by max overlap, so an eigenvalue crossing doesn't fake a jump). For each $k$: $|\cos(u_{k,t},u_{k,t-k'})|$ at short lags $k'\in\{1,2,5\}$ (<b>1 = frozen, a dip = it rotated</b>) and the running <b>count</b> of downward crossings below $\tau$ (each = one <b>switch</b>) — now <b>three lines, one per lag</b> $\{1,2,5\}$. Lags are counted in <b>diagnostic ticks</b> (so they populate at any eig-every, not just 1). 3 rows ($k=1,2,3$) × 4 plots. $\tau$ = <input id="gw2tau" value="0.7" style="width:44px"> (next run).</p>
+<p class="cap">The top-3 eigenvectors of $M_r=Q_r=\sum_k r_kQ_k$, each followed as a <b>continuous mode</b> (matched to the previous step by max overlap, so an eigenvalue crossing doesn't fake a jump). For each $k$: $|\cos(u_{k,t},u_{k,t-k'})|$ at short lags $k'\in\{1,2,5\}$ (<b>1 = frozen, a dip = it rotated</b>) and the running <b>count</b> of downward crossings below $\tau$ (each = one <b>switch</b>) — now <b>three lines, one per lag</b> $\{1,2,5\}$. Lags are counted in <b>diagnostic ticks</b> (so they populate at any eig-every, not just 1). 3 rows ($k=1,2,3$) × 4 plots. $\tau$ = <input id="gw2tau" value="0.5" style="width:44px"> (next run).</p>
 <p class="cap" style="margin:8px 0 1px;color:#475569"><b>$k=1$ — top $Q_r$ eigenvector</b></p>
 <div class="plotrow row4"><div id="p_gw2_k1_l1" class="plot" style="height:220px"></div><div id="p_gw2_k1_l2" class="plot" style="height:220px"></div><div id="p_gw2_k1_l5" class="plot" style="height:220px"></div><div id="p_gw2_k1_cnt" class="plot" style="height:220px"></div></div>
 <p class="cap" style="margin:8px 0 1px;color:#475569"><b>$k=2$ — 2nd $Q_r$ eigenvector</b></p>
@@ -1050,6 +1050,8 @@ Each line “$i\!\cdot\!j$” is $\cos\angle(\text{vector }i,\text{vector }j)\in
   <label style="white-space:nowrap;font-size:12px" title="Log-log (default): x = rank+1 (log), y = signed-log sign(λ)·log₁₀(1+|λ|) — the sign is taken OUT of the log so negative eigenvalues stay negative on a log-magnitude axis. Uncheck for the raw signed-linear scree."><input type="checkbox" id="slq4log" checked onchange="slqSnapRenderNow(SLQ_CURIDX);updateSLQOverlay()"> log-log</label>
 </div>
 <div class="plotrow row4"><div id="p_slqH4" class="plot" style="height:280px"></div><div id="p_slqG4" class="plot" style="height:280px"></div><div id="p_slqS4" class="plot" style="height:280px"></div><div id="p_slqHL4" class="plot" style="height:280px"></div></div>
+<p class="cap" style="margin-top:10px"><b>Overlay</b> — all four sorted spectra ($H$, $G$, $S$, $\nabla^2L$) on one axis (same signed-log scree, same scrubber tick) so you can compare their shapes and watch them evolve together.</p>
+<div class="plotrow row1"><div id="p_slqAll4" class="plot" style="height:340px"></div></div>
 </div>
 
 <div id="sec_4">
@@ -1613,16 +1615,19 @@ function _slqXY(d,P){
   if(lg){const lt=_symlt(s.y);return {x:s.x.map(v=>v+1),y:s.y.map(v=>_slog(v,lt)),lg};}
   return {x:s.x.slice(),y:s.y.slice(),lg};
 }
-function updateSLQOverlay(src,P){
-  if(src){for(const k of ['sH','sG','sS','sHL'])if(src[k])_SLQALL[k]=src[k];}
-  if(P!=null&&P>0)_SLQALL.p=P;
-  const g=document.getElementById('p_sAll'); if(!g||!g.data)return;
+function _renderOverlayInto(plotId,src,P){   // render the 4 sorted spectra of `src` into the 4 traces of plotId
+  const g=document.getElementById(plotId); if(!g||!g.data)return;
   const xs=[],ys=[]; let lg=true;
-  for(const k of ['sH','sG','sS','sHL']){const dd=_SLQALL[k]; if(dd){const r=_slqXY(dd,_SLQALL.p);xs.push(r.x);ys.push(r.y);lg=r.lg;}else{xs.push([]);ys.push([]);}}
-  try{Plotly.restyle('p_sAll',{x:xs,y:ys},[0,1,2,3]);
-      Plotly.relayout('p_sAll',{'xaxis.type':lg?'log':'linear','yaxis.type':'linear',
+  for(const k of ['sH','sG','sS','sHL']){const dd=src&&src[k]; if(dd){const r=_slqXY(dd,P);xs.push(r.x);ys.push(r.y);lg=r.lg;}else{xs.push([]);ys.push([]);}}
+  try{Plotly.restyle(plotId,{x:xs,y:ys},[0,1,2,3]);
+      Plotly.relayout(plotId,{'xaxis.type':lg?'log':'linear','yaxis.type':'linear',
         'xaxis.title.text':lg?'rank+1 (eigenvalues, high→low)':'rank (eigenvalues, high→low)',
         'yaxis.title.text':lg?'sign(λ)·log₁₀(1+|λ|/λref)':'eigenvalue','xaxis.autorange':true,'yaxis.autorange':true});}catch(e){}
+}
+function updateSLQOverlay(src,P){   // §5 live-latest overlay (p_sAll): cache latest densities, then render
+  if(src){for(const k of ['sH','sG','sS','sHL'])if(src[k])_SLQALL[k]=src[k];}
+  if(P!=null&&P>0)_SLQALL.p=P;
+  _renderOverlayInto('p_sAll',_SLQALL,_SLQALL.p);
 }
 // ── §4 SLQ-scree HISTORY + scrubber: keep every SLQ tick's four operator densities so the sorted
 //    eigenspectrum can be REWOUND over training (drag the slider under §4). Mirrors the §20/§21 snapshot
@@ -1632,6 +1637,7 @@ const SLQ4_IDS=['p_slqH4','p_slqG4','p_slqS4','p_slqHL4'], SLQ4_KEYS=['sH','sG',
 let SLQ_SNAPS=[], SLQ_RAF=0, SLQ_PENDING=-1, SLQ_CURIDX=0; const SLQ_MAXSNAPS=4000;
 function slqSnapRenderNow(i){const s=SLQ_SNAPS[i];if(!s)return;SLQ_CURIDX=i;
   for(let k=0;k<4;k++){if(s[SLQ4_KEYS[k]])refreshSLQ(SLQ4_IDS[k],s[SLQ4_KEYS[k]],s.p);}
+  _renderOverlayInto('p_slqAll4',s,s.p);   // §4 overlay: all four at the scrubbed tick
   const sp=document.getElementById('slq4_step');if(sp)sp.textContent=`step ${s.t}  ·  snapshot ${i+1}/${SLQ_SNAPS.length}`;
   const sl=document.getElementById('slq4_slider');if(sl&&+sl.value!==i)sl.value=i;}
 function slqSnapRenderIdx(i){SLQ_PENDING=i;if(SLQ_RAF)return;SLQ_RAF=requestAnimationFrame(()=>{SLQ_RAF=0;const j=SLQ_PENDING;SLQ_PENDING=-1;if(j>=0)slqSnapRenderNow(j);});}
@@ -3676,7 +3682,7 @@ function syncSectionVis(multi){
   {const el=document.getElementById('sec_s17');if(el){const vis=chk('en25');el.style.display=vis?'':'none';   // §17 per-sample optimizer (own toggle en25)
     if(vis)requestAnimationFrame(()=>{for(const id of S17_IDS){const gd=document.getElementById(id);if(gd&&gd._fullLayout){try{Plotly.Plots.resize(gd);}catch(e){}}}});}}   // re-size §17 plots when the section becomes visible
   {const el=document.getElementById('sec_slqH');if(el){const vis=chk('enSlq');el.style.display=vis?'':'none';   // §4 SLQ spectral density (own toggle enSlq)
-    if(vis)requestAnimationFrame(()=>{for(const id of ['p_slqH4','p_slqG4','p_slqS4','p_slqHL4']){const gd=document.getElementById(id);if(gd&&gd._fullLayout){try{Plotly.Plots.resize(gd);}catch(e){}}}});}}   // re-size §4 SLQ plots when shown
+    if(vis)requestAnimationFrame(()=>{for(const id of ['p_slqH4','p_slqG4','p_slqS4','p_slqHL4','p_slqAll4']){const gd=document.getElementById(id);if(gd&&gd._fullLayout){try{Plotly.Plots.resize(gd);}catch(e){}}}});}}   // re-size §4 SLQ plots when shown
   // ★ prediction-panel visibility (this widget's headline panels — enPd/enPt/enP4/enP3/enPs)
   {const el=document.getElementById('sec_pred'); if(el)el.style.display=chk('enPd')?'':'none';}
   {const el=document.getElementById('sec_trace');if(el)el.style.display=chk('enPt')?'':'none';}
@@ -4114,10 +4120,13 @@ function initLivePlots(n,kth,nResid,thr,n7,n8,multi){
   newP('p_sG',slqT('#16a34a'),slqLayout('SLQ spectrum (sorted) — Gauss–Newton G'));
   newP('p_sS',slqT('#d35400'),slqLayout('SLQ spectrum (sorted) — residual term S'));
   newP('p_sHL',slqT('#dc2626'),slqLayout('SLQ spectrum (sorted) — full loss Hessian'));
-  {const L=slqLayout('SLQ spectrum (sorted) — ALL overlaid: H · G · S · ∇²L');L.showlegend=true;
-   L.legend={font:{size:9},orientation:'h',x:0,xanchor:'left',y:1.12,yanchor:'bottom',bgcolor:'rgba(255,255,255,0.72)'};
-   const ov=(name,c)=>({x:[],y:[],mode:'lines',name,line:{color:c,width:1.9}});
-   newP('p_sAll',[ov('function Hessian H','#2563eb'),ov('Gauss–Newton G','#16a34a'),ov('residual term S','#d35400'),ov('full loss Hessian ∇²L','#dc2626')],L);}
+  {const ov=(name,c)=>({x:[],y:[],mode:'lines',name,line:{color:c,width:1.9}});
+   const mkOverlay=id=>{const L=slqLayout('SLQ spectrum (sorted) — ALL overlaid: H · G · S · ∇²L');L.showlegend=true;
+     L.legend={font:{size:9},orientation:'h',x:0,xanchor:'left',y:1.12,yanchor:'bottom',bgcolor:'rgba(255,255,255,0.72)'};
+     newP(id,[ov('function Hessian H','#2563eb'),ov('Gauss–Newton G','#16a34a'),ov('residual term S','#d35400'),ov('full loss Hessian ∇²L','#dc2626')],L);};
+   mkOverlay('p_sAll');     // §5 live-latest overlay
+   mkOverlay('p_slqAll4');  // §4 scrubber overlay (renders the scrubbed snapshot)
+  }
   // §6 eigenspace rotation
   const paT=()=>[{x:[],y:[],mode:'lines',name:'max angle',line:{color:'#2563eb',width:1.9}},{x:[],y:[],mode:'lines',name:'mean angle',line:{color:'#94a3b8',width:1.5,dash:'dot'}}];
   newP('p_paPos',paT(),baseLayout('positive eigenspace — principal angle vs prev','angle (deg)',false));
@@ -5717,7 +5726,7 @@ function currentQueryParams(){   // the exact query-style param dict the backend
   {const e=document.getElementById('ssk');if(e)o['ssk']=e.value||'5';}   // self-stabilization: # top/bottom eigenvectors of the preconditioned Hessian H_P
   o['qspec']=chk('enQspec')?'1':'0';
   o['s6f']=chk('enS6f')?'1':'0'; o['s6fk']=(document.getElementById('s6fk')||{}).value||'16';   // §6 fixed-basis
-  o['gw2']=chk('engw2')?'1':'0'; o['gw2tau']=(document.getElementById('gw2tau')||{}).value||'0.7';   // ★grok-② Q_r direction-change counter
+  o['gw2']=chk('engw2')?'1':'0'; o['gw2tau']=(document.getElementById('gw2tau')||{}).value||'0.5';   // ★grok-② Q_r direction-change counter
   o['gw3']=chk('engw3')?'1':'0'; o['gw3rank']=(document.getElementById('gw3rank')||{}).value||'4'; o['gw3k']=(document.getElementById('gw3k')||{}).value||'20'; o['gw3full']=chk('gw3full')?'1':'0';   // ★grok-③
   {const _rc=document.getElementById('gw3randcap');if(_rc&&_rc.value)o['gw3randcap']=_rc.value;}   // ★grok-③ optional override of the dense-random-Q memory cap (bytes)
   o['gw4']=chk('engw4')?'1':'0'; o['gw4K']=(document.getElementById('gw4K')||{}).value||'15'; o['gw4thr']=(document.getElementById('gw4thr')||{}).value||'0.5'; o['gw4t0s']=(document.getElementById('gw4t0s')||{}).value||'0,25,50,100';   // ★grok-④ curvature-subspace persistence

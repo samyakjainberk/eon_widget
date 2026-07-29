@@ -4595,7 +4595,7 @@ def run_stream(P):
     s33 = P.get("s33", 0)                # §25: ‖∇L‖, ‖M_r∇L‖, ‖JᵀJ∇L‖, |⟨∇‖J‖²,Q∇L⟩|, |⟨∇‖J‖²,G∇L⟩| evolution (single plot)
     s34 = P.get("s34", 0)                # §26: direction-drift |cos(v_i(t),v_i(t−k))| of the top-3 GN/NTK & top-3⊕bottom-3 M_r eigenvectors
     gw2 = int(P.get("gw2", 0))           # ★grok-② direction-change: |cos(u_{k,t},u_{k,t−k'})| for k'∈{1,2,5}, k=1,2,3 (top-3 Q_r=M_r eigvecs) + running count of |cos(t,t−1)|<τ crossings (how many times the model switched that direction)
-    gw2tau = float(P.get("gw2tau", 0.7)) # ★grok-② threshold τ on |cos(t,t−1)|: a downward crossing below τ = one direction switch
+    gw2tau = float(P.get("gw2tau", 0.5)) # ★grok-② threshold τ on |cos(t,t−1)|: a downward crossing below τ = one direction switch
     gw3 = int(P.get("gw3", 0))           # ★grok-③ ALL §6 residual↔spectrum-alignment panels (NTK + M_r + Gauss-Newton, 3 panels × 4 bar plots) computed under {evolving, init-fixed, random, random-low-rank} Q — multi-select overlay in the widget — + a per-mode SLQ M_r spectrum (|λ| log-log)
     gw3rank = max(1, int(P.get("gw3rank", 4)))   # ★grok-③ rank r of the random-low-rank Q
     gw3k = max(2, int(P.get("gw3k", 20)))         # ★grok-③ top-K (NTK/GN) & top-K⊕bottom-K (M_r) eigen-count for the §6 bars
@@ -5466,10 +5466,10 @@ def run_stream(P):
                     if t % gw3specevery == 0 or t == steps:                          # throttled SLQ M_r spectrum per mode (client plots |λ| log-log)
                         try:
                             spec = {}
-                            spec["ev"] = slq_density(_mode_op(None), p, 4, 24, 100, 0xC0FFEE, block=1)
-                            spec["fx"] = slq_density(_mode_op({"mode": "fix", "theta_t": gw3_th0, "Qrand": None}), p, 4, 24, 100, 0xC0FFEE, block=1)
-                            spec["rd"] = slq_density(op_rd, p, 4, 24, 100, 0xC0FFEE, block=1)   # random signed symmetric (Wigner-like)
-                            spec["lr"] = slq_density(op_lr, p, 4, 24, 100, 0xC0FFEE, block=1)   # low stable rank, high true rank (decaying)
+                            spec["ev"] = slq_density(_mode_op(None), p, 4, 24, 100, 0xC0FFEE, block=slqBlock)                                   # BLOCK SLQ (slqBlock, default 4)
+                            spec["fx"] = slq_density(_mode_op({"mode": "fix", "theta_t": gw3_th0, "Qrand": None}), p, 4, 24, 100, 0xC0FFEE, block=slqBlock)
+                            spec["rd"] = slq_density(op_rd, p, 4, 24, 100, 0xC0FFEE, block=slqBlock)   # random signed symmetric (Wigner-like)
+                            spec["lr"] = slq_density(op_lr, p, 4, 24, 100, 0xC0FFEE, block=slqBlock)   # low stable rank, high true rank (decaying)
                             g_gw3["spec"] = spec
                         except Exception:
                             pass
@@ -7585,7 +7585,7 @@ def _parse_params(q):
         "ssk": fi("ssk", 5),             # self-stabilization: # top/bottom eigenvectors of H_P (default 5)
         "s6f": g("s6f", "0") == "1",     # §6 FIXED-BASIS panel (not a prediction): §6 phases along the frozen init eigenbasis of M_r & GN (ranking fixed at init) — how each direction is learned
         "gw2": g("gw2", "0") == "1",     # ★grok-② direction-change of top-3 Q_r eigenvectors (cos-lags 1/2/5 + τ-crossing switch counter)
-        "gw2tau": float(g("gw2tau", "0.7")),  # ★grok-② τ threshold for the switch counter
+        "gw2tau": float(g("gw2tau", "0.5")),  # ★grok-② τ threshold for the switch counter
         "gw3": g("gw3", "0") == "1",     # ★grok-③ §6 phases under {evolving, init-fixed, random, random-low-rank} Q + per-mode SLQ M_r spectrum
         "gw3rank": int(g("gw3rank", "4")), "gw3k": int(g("gw3k", "20")),    # ★grok-③ rank r of random-low-rank Q + §6 top/bot-K
         "gw3full": g("gw3full", "0") == "1",  # ★grok-③ low-rank build: matched-spectrum (0) vs fully-random (1)
