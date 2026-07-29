@@ -131,6 +131,10 @@ def capture(params, device, dtype, cifar_dir, progress=True, partial_save=None, 
     last = t0; lastsave = t0
     try:
         for msg in gen:
+            if msg.get("type") == "gwstream":
+                continue                             # ★ drop the transient grok LIVE partials (mirrors the browser's GPU_CAPTURE):
+                                                     #   the FINAL grok state rides the terminal "gwfinal" record, so keeping the
+                                                     #   many per-emit partials for gw5–gw10 (dozens of runs) only bloats the file.
             records.append(server._sanitize(msg))
             now = time.time()
             if progress and (now - last) > 2.0:
