@@ -3906,9 +3906,15 @@ const GW3P0_RUNS=[['true','true (no Taylor)','#111827'],['evolve','evolving Q','
 function _gw3p0Ids(){return ['p_gw3p0_loss','p_gw3p0_acc','p_gw3p0_sharp','p_gw3p0_qr','p_gw3p0_hq'];}
 function gw3p0BuildPlots(){
   const host=document.getElementById('gw3p0_blocks'); if(!host||host._built)return; host._built=true;
-  host.innerHTML='<div class="plotrow row3"><div id="p_gw3p0_loss" class="plot" style="height:260px"></div>'+
+  const h3=(t)=>'<h3 style="margin:12px 0 2px;font-size:13.5px;color:#475569">'+t+'</h3>';
+  host.innerHTML=h3('Panel 0 — training statistics (5 runs)')+
+    '<div class="plotrow row3"><div id="p_gw3p0_loss" class="plot" style="height:260px"></div>'+
     '<div id="p_gw3p0_acc" class="plot" style="height:260px"></div><div id="p_gw3p0_sharp" class="plot" style="height:260px"></div></div>'+
-    '<div class="plotrow row2"><div id="p_gw3p0_qr" class="plot" style="height:270px"></div><div id="p_gw3p0_hq" class="plot" style="height:270px"></div></div>';
+    '<div class="plotrow row2"><div id="p_gw3p0_qr" class="plot" style="height:270px"></div><div id="p_gw3p0_hq" class="plot" style="height:270px"></div></div>'+
+    h3('Panel 1 — residual r ↔ top-4 NTK eigenvectors (per run, its own NTK)')+
+    '<div class="plotrow row4"><div id="p_gw3p0_nt1" class="plot" style="height:230px"></div><div id="p_gw3p0_nt2" class="plot" style="height:230px"></div><div id="p_gw3p0_nt3" class="plot" style="height:230px"></div><div id="p_gw3p0_nt4" class="plot" style="height:230px"></div></div>'+
+    h3('Panel 2 — Jᵀr ↔ top-4 M_r eigenvectors (per run, its own M_r)')+
+    '<div class="plotrow row4"><div id="p_gw3p0_mr1" class="plot" style="height:230px"></div><div id="p_gw3p0_mr2" class="plot" style="height:230px"></div><div id="p_gw3p0_mr3" class="plot" style="height:230px"></div><div id="p_gw3p0_mr4" class="plot" style="height:230px"></div></div>';
   const leg=document.createElement('div'); leg.id='leg_gw3p0'; leg.className='gwleg'; host.insertBefore(leg,host.firstChild);   // ★ common legend on top
   const lay=(title,yl,rng)=>{const L=_gwExpLayout(title,yl,false);L.showlegend=false;L.margin=Object.assign({},L.margin,{b:34});if(rng)L.yaxis.range=rng;return L;};
   const pair=(d2)=>{const tr=[];for(const[m,nm,c] of GW3P0_RUNS){tr.push({x:[],y:[],mode:'lines',name:nm,line:{color:c,width:1.8}});tr.push({x:[],y:[],mode:'lines',name:nm+' ('+d2+')',line:{color:c,width:1.4,dash:'dot'}});}return tr;};
@@ -3918,15 +3924,21 @@ function gw3p0BuildPlots(){
   newP('p_gw3p0_sharp',single(),lay('sharpness λmax(∇²L̂) (÷N)','sharpness'));
   newP('p_gw3p0_qr',pair('bottom'),lay('Q_r=Σr̂ₖQₖ · top (solid) ⊕ bottom (dot) eig (block SLQ, ÷N)','λ'));
   newP('p_gw3p0_hq',pair('bottom'),lay('ΣQ=ΣₖQₖ · top (solid) ⊕ bottom (dot) eig (block SLQ, ÷N)','λ'));
+  for(let i=1;i<=4;i++){newP('p_gw3p0_nt'+i,single(),lay('|cos(r, NTK v'+i+')| vs iter','|cos|',[0,1.02]));
+                        newP('p_gw3p0_mr'+i,single(),lay('|cos(Jᵀr, M_r u'+i+')| vs iter','|cos|',[0,1.02]));}
 }
 function renderGw3p0(g){
   gw3p0BuildPlots();
-  {const leg=document.getElementById('leg_gw3p0'); if(leg)_buildLegend(leg,'gw3p0',GW3P0_RUNS.map(([m,nm,c])=>({name:nm,color:c,dash:'solid'})),'runs (solid = train / top-eig · dotted = test / bottom-eig):',['p_gw3p0_loss','p_gw3p0_acc','p_gw3p0_sharp','p_gw3p0_qr','p_gw3p0_hq'],(i,pid)=>pid.endsWith('_sharp')?[i]:[2*i,2*i+1]);}
+  {const leg=document.getElementById('leg_gw3p0');
+   const pairIds=['p_gw3p0_loss','p_gw3p0_acc','p_gw3p0_qr','p_gw3p0_hq'];
+   const allIds=pairIds.concat(['p_gw3p0_sharp']); for(let i=1;i<=4;i++){allIds.push('p_gw3p0_nt'+i);allIds.push('p_gw3p0_mr'+i);}
+   if(leg)_buildLegend(leg,'gw3p0',GW3P0_RUNS.map(([m,nm,c])=>({name:nm,color:c,dash:'solid'})),'runs (solid = train / top-eig · dotted = test / bottom-eig):',allIds,(i,pid)=>pairIds.indexOf(pid)>=0?[2*i,2*i+1]:[i]);}
   const by={}; for(const r of (g.runs||[]))by[r.mode]=r;
   const doPair=(id,ka,kb)=>{const xs=[],ys=[];for(const[m] of GW3P0_RUNS){const r=by[m]||{};xs.push(r.it||[]);ys.push(r[ka]||[]);xs.push(r.it||[]);ys.push(r[kb]||[]);}try{Plotly.restyle(id,{x:xs,y:ys},xs.map((_,i)=>i));}catch(e){}};
   const doSingle=(id,k)=>{const xs=[],ys=[];for(const[m] of GW3P0_RUNS){const r=by[m]||{};xs.push(r.it||[]);ys.push(r[k]||[]);}try{Plotly.restyle(id,{x:xs,y:ys},xs.map((_,i)=>i));}catch(e){}};
   doPair('p_gw3p0_loss','ltr','lte'); doPair('p_gw3p0_acc','atr','ate'); doSingle('p_gw3p0_sharp','sharp');
   doPair('p_gw3p0_qr','qrTop','qrBot'); doPair('p_gw3p0_hq','hTop','hBot');
+  for(let i=1;i<=4;i++){doSingle('p_gw3p0_nt'+i,'nt'+i); doSingle('p_gw3p0_mr'+i,'mr'+i);}
 }
 function grokSelectAll(state){   // check/uncheck all ★grok panels ①–⑩ and fire their show/hide toggles
   for(let i=1;i<=10;i++){const cb=document.getElementById('engw'+i);if(!cb)continue;cb.checked=state;const fn=window['toggleGw'+i];if(typeof fn==='function')try{fn();}catch(e){}}}

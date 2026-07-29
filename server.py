@@ -4369,6 +4369,23 @@ def _blockslq_extremes(hvp, p, block=4, m=24, seed=0xB10C5):
         return 0.0, 0.0
 
 
+def _topk_align(hvp, dim, vec, kk=4, seed=0x51A9):
+    """|cos(vec, v_i)| for the top-`kk` eigenvectors v_i of the symmetric operator `hvp` (Lanczos). Used by
+    Panel-1 (r ↔ top-k NTK eigvecs) and Panel-2 (Jᵀr ↔ top-k M_r eigvecs) of the Panel-0 runs."""
+    out = [None] * kk
+    try:
+        m = min(dim, max(24, 6 * kk))
+        Qb, T, k = _lanczos_core(hvp, dim, m, 0, dt=DTYPE, q0=_randvec16(dim, seed).to(dtype=DTYPE, device=_dev()))
+        mu, Sv = _safe_eigh(T); ordv = torch.argsort(mu, descending=True); Qm = torch.stack(Qb)
+        vn = float(vec.norm()) + 1e-30
+        for i in range(min(kk, k)):
+            vi = Sv[:, int(ordv[i])].to(device=_dev(), dtype=DTYPE) @ Qm
+            out[i] = abs(float(vi @ vec)) / (vn * (float(vi.norm()) + 1e-30))
+    except Exception:
+        pass
+    return out
+
+
 def _gw3p0_ops(mode, th_ref, X, N, outD, seed, lr_rank):
     """Order-2 quadratic-surrogate operators at reference θ_ref (VALIDATED: f̂=f₀+J₀δ+½δᵀQₖδ,
     ∇L̂=−(1/N)(J₀ᵀr̂+M_r̂δ)). Q per mode: evolve/fix = true Φ(θ_ref); rand = iid-Gaussian per-output (shared
@@ -4412,13 +4429,17 @@ def _gw3p0_iter(mode, th0, Xtr, Ytr, Xte, Yte, N, Nte, outD, steps, ev, lr, seed
     freeze Q). Records {it, ltr,lte,atr,ate, sharp=λmax(∇²L̂), qrTop/qrBot=Q_r extremes, hTop/hBot=ΣQ extremes}
     — all curvature on the ÷N scale; Q_r/ΣQ extremes via BLOCK SLQ."""
     p = th0.numel(); M = N * outD; scN = 1.0 / max(N, 1)
-    rec = {k: [] for k in ("it", "ltr", "lte", "atr", "ate", "sharp", "qrTop", "qrBot", "hTop", "hBot")}
+    _KEYS = ("it", "ltr", "lte", "atr", "ate", "sharp", "qrTop", "qrBot", "hTop", "hBot",
+             "nt1", "nt2", "nt3", "nt4", "mr1", "mr2", "mr3", "mr4")   # nt* = r↔NTK-eigvec align (Panel-1); mr* = Jᵀr↔M_r-eigvec align (Panel-2)
+    rec = {k: [] for k in _KEYS}
     Ytrf = Ytr.reshape(-1)[:M]; Ytef = (Yte.reshape(-1)[:Nte * outD] if Yte is not None else None)
     onesNC = torch.ones(N, outD, dtype=DTYPE, device=_dev()); onesM = onesNC.reshape(-1)
-    def _emit(t, ltr, lte, atr, ate, sharp, qt, qb, ht, hb):
+    def _emit(t, ltr, lte, atr, ate, sharp, qt, qb, ht, hb, nt, mr):
         rec["it"].append(t)
         for k, val in zip(("ltr", "lte", "atr", "ate", "sharp", "qrTop", "qrBot", "hTop", "hBot"),
                           (ltr, lte, atr, ate, sharp, qt * scN, qb * scN, ht * scN, hb * scN)): rec[k].append(val)
+        for j in range(4):
+            rec["nt%d" % (j + 1)].append(nt[j] if nt else None); rec["mr%d" % (j + 1)].append(mr[j] if mr else None)
     if mode == "true":
         th = th0.detach().clone(); _lr = lr; _Lmin = [None]
         for t in range(steps + 1):
@@ -4434,7 +4455,17 @@ def _gw3p0_iter(mode, th0, Xtr, Ytr, Xte, Yte, N, Nte, outD, steps, ev, lr, seed
                 sharp = float(lanczos_extreme_vals(lambda v: hvpL(th, Xtr, Ytr, v), p, 1, min(p, 20), 0x5EED1)[0][0])
                 qt, qb = _blockslq_extremes(lambda v: hvpS(th, Xtr, v, rc), p)
                 ht, hb = _blockslq_extremes(lambda v: hvpS(th, Xtr, v, onesNC), p)
-                _emit(t, ltr, lte, atr, ate, sharp, qt, qb, ht, hb); yield rec
+                # Panel-1 (r↔NTK eigvecs) + Panel-2 (Jᵀr↔M_r eigvecs), for THIS run's own NTK / M_r
+                if isinstance(_TL.model, MlpModel):
+                    Jm = jac_cols(th, Xtr)[0][:M]; g = Jm.t() @ rr; _ntk = lambda w: Jm @ (Jm.t() @ w)
+                else:
+                    g = _TL.model.vjp(th, Xtr, rc)[0]
+                    def _ntk(w):
+                        z = _TL.model.vjp(th, Xtr, w.reshape(N, outD))[0]
+                        fp = _TL.model.forward(th + EPS * z, Xtr); fm = _TL.model.forward(th - EPS * z, Xtr)
+                        return ((fp - fm) / (2.0 * EPS)).reshape(-1)[:M]
+                nt = _topk_align(_ntk, M, rr, 4); mr = _topk_align(lambda v: hvpS(th, Xtr, v, rc), p, g, 4)
+                _emit(t, ltr, lte, atr, ate, sharp, qt, qb, ht, hb, nt, mr); yield rec
             if t < steps:
                 th = th - _lr * _opt_dir(_TL.model, gradL(th, Xtr, Ytr)[0], "gd")
                 if not torch.isfinite(th).all(): break
@@ -4463,7 +4494,10 @@ def _gw3p0_iter(mode, th0, Xtr, Ytr, Xte, Yte, N, Nte, outD, steps, ev, lr, seed
             sharp = float(lanczos_extreme_vals(_H, p, 1, min(p, 20), 0x5EED1)[0][0])
             qt, qb = _blockslq_extremes(lambda v: ops["Mc"](v, rhat), p)       # Q_r = Σ r̂ₖ Qₖ
             ht, hb = _blockslq_extremes(lambda v: ops["Mc"](v, onesM), p)      # ΣQ = Σ Qₖ
-            _emit(t, ltr, lte, atr, ate, sharp, qt, qb, ht, hb); yield rec
+            ghat = _JT(rhat)                                                   # Ĵᵀr̂ (= −N·∇L̂)
+            nt = _topk_align(lambda w: _JV(_JT(w)), M, rhat, 4)               # Panel-1: r̂ ↔ NTK(=Ĵ Ĵᵀ) eigvecs
+            mr = _topk_align(lambda v: ops["Mc"](v, rhat), p, ghat, 4)        # Panel-2: Ĵᵀr̂ ↔ M_r̂ eigvecs
+            _emit(t, ltr, lte, atr, ate, sharp, qt, qb, ht, hb, nt, mr); yield rec
         if t < steps:
             grad = -(1.0 / N) * (ops["vjp"](rhat) + ops["Mc"](delta, rhat))
             delta = delta - _lr * grad
