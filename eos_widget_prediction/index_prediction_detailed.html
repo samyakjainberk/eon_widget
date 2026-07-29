@@ -314,7 +314,7 @@
   <label title="★grok-⑥ Output scaling — sweep a gain α on the TARGET LABELS Y (not the model). 'once at init' scales the targets to α·Y₀ from the start; 'at intervals' ramps the targets up by a fraction of their initial value Y₀ every ~steps/5 (reaching α·Y₀ by the end). Same causal-chain tracking. Hypothesis: larger target magnitude ⇒ ratio↑ ⇒ PS↑ ⇒ alignment↑ ⇒ faster grokking."><input type="checkbox" id="engw6" onchange="toggleGw6()"> ★grok-⑥ · Output-scaling intervention (target labels)</label>
   <span style="font-size:12px;color:#475569"> apply <select id="gw6mode"><option value="init">once at init</option><option value="interval">at intervals</option></select> · α range <input id="gw6arange" value="4" title="⑥ target-gain α is swept log-symmetrically over [1/f, f]. Raise f to widen (default 4 ⇒ α∈0.25…4)." style="width:34px"></span>
   <label title="★grok-⑦ Optimization — sweep λ in a MODIFIED update that up-weights the residual-curvature term |gᵀM_rg|. Rules: DEFAULT η²λ Taylor = θ−η∇L+η²λ₂M̄_r∇L−η²λ₁Ḡ∇L (per-sample M̄_r=(1/N)Σr_kQ_k, Ḡ=(1/N)JᵀJ — the 2/η sharpness scale, so literal η² is stable) ; ⋆ M_r-normalized = θ−η∇L±ηλ(∇LᵀM_r∇L/‖∇L‖²)∇L. λ=0 is the plain-GD baseline. Same causal-chain + grokking tracking."><input type="checkbox" id="engw7" onchange="toggleGw7()"> ★grok-⑦ · Optimization intervention</label>
-  <span style="font-size:12px;color:#475569"> rule <select id="gw7rule"><option value="taylor">η²λ Taylor</option><option value="star" selected>⋆ M_r-normalized</option></select> sign <select id="gw7sign"><option value="plus">+</option><option value="minus">−</option></select> · λ max <input id="gw7lammax" value="10" title="⑦ λ sweep upper end — the run legend spans λ∈[0, this]. Raise to widen the intervention range." style="width:38px"> · <label title="NEGATIVE-λ runs sharpen fastest and would hit the Edge of Stability, where self-stabilization caps the sharpness. To see the pure blowup, negative-λ runs use an adaptive lr η=min(η₀, safety·2/σ) that holds σ·η just below 2 — suppressing self-stab while shrinking η only as fast as σ grows. safety→1 = larger η/less margin; kicks in only once σ nears the edge.">−λ EoS-safety <input id="gw7schedsafety" value="0.9" title="σ·η held at safety·2 (<2) for the negative-λ anti-self-stabilization schedule" style="width:34px"></label></span>
+  <span style="font-size:12px;color:#475569"> rule <select id="gw7rule"><option value="taylor">η²λ Taylor</option><option value="star" selected>⋆ M_r-normalized</option></select> sign <select id="gw7sign"><option value="plus">+</option><option value="minus">−</option></select> · λ max <input id="gw7lammax" value="10" title="⑦ λ sweep upper end — the run legend spans λ∈[0, this]. Raise to widen the intervention range." style="width:38px"><input id="gw7schedsafety" type="hidden" value="0.9"></span>
   <span style="font-size:12px;color:#475569;display:block;margin-top:2px"> sweep <select id="gw7sweep" title="λ₁ weights the −Ḡ∇L (JᵀJ / Gauss-Newton) term; λ₂ weights the +M̄_r∇L (residual-curvature) term. DEFAULT 'λ₂ only (M_r)' sweeps λ₂ with λ₁ held fixed (=1). Choose which to vary to bias the update toward one term over the other."><option value="mr" selected>λ₂ only (M_r), λ₁ fixed</option><option value="bias">bias: λ₁+λ₂=λmax (pure JᵀJ ↔ pure M_r)</option><option value="gn">λ₁ only (JᵀJ), λ₂ fixed</option><option value="both">both (λ₁=λ₂ diagonal)</option></select> · fixed λ₁ <input id="gw7lam1" value="1" title="Fixed λ₁ (JᵀJ weight) used when sweeping λ₂ (mode 'λ₂ only') — default 1" style="width:32px"> · fixed λ₂ <input id="gw7lam2" value="0" title="Fixed λ₂ (M_r weight) used when sweeping λ₁ (mode 'λ₁ only')" style="width:32px"></span>
   <label title="★grok-⑧ Architecture — sweep the activation function (relu→gelu→tanh→sine→bspline, a complexity ladder incl. a KAN-style fixed cubic B-spline; arXiv:2503.10065), rebuilding the MLP with the same seeded init, and track the causal chain + grokking. Hypothesis: higher activation complexity ⇒ ratio↑ ⇒ PS↑ ⇒ alignment↑ ⇒ better generalization."><input type="checkbox" id="engw8" onchange="toggleGw8()"> ★grok-⑧ · Architecture intervention (activation sweep, incl. b-spline)</label>
   <label title="★grok-⑨ Random-search descent — GRADIENTS ONLY pick the search subspace (the top-K eigenvectors of M_r, recomputed every N steps); within it the update is pure RANDOM SEARCH: sample random directions, keep the one that decreases the loss AND makes Δf align with the residual (f moves toward the targets). Compares this random-search optimizer against a plain-GD baseline. No gradient step is ever taken."><input type="checkbox" id="engw9" onchange="toggleGw9()"> ★grok-⑨ · Random-search on the top-M_r subspace (vs GD)</label>
@@ -3892,7 +3892,8 @@ function gw10BuildPlots(){
 // per-tick step message (final payload) and from live type:'gwstream' partial payloads (curves grow during training).
 function renderGw10(g){
   gw10BuildPlots();
-  _commonLegend('gw10',GW10_RUNS.map(([m,nm,c])=>({name:nm,color:GW10_RUNCOL[m],dash:'solid'})),(g&&g.sigma!=null?('init σ='+(+g.sigma).toPrecision(3)):''));
+  {const g10plots=[];for(const K of GW10_KS)for(const s of ['ltr','lte','atr','ate','al1','al2','al3','al4'])g10plots.push('p_gw10_k'+K+'_'+s);
+   _commonLegend('gw10',GW10_RUNS.map(([m,nm,c])=>({name:nm,color:GW10_RUNCOL[m],dash:'solid'})),(g&&g.sigma!=null?('init σ='+(+g.sigma).toPrecision(3)):''),g10plots,(i)=>[i]);}
   const metrics=['ltr','lte','atr','ate','al1','al2','al3','al4'];
   for(const K of (g.ks||GW10_KS)){const blk=g.byk&&g.byk[String(K)];if(!blk||!blk.runs)continue;
     const byMode={};for(const r of blk.runs)byMode[r.mode]=r;   // order runs to match GW10_RUNS (top/bottom/null/rand)
@@ -3920,7 +3921,7 @@ function gw3p0BuildPlots(){
 }
 function renderGw3p0(g){
   gw3p0BuildPlots();
-  {const leg=document.getElementById('leg_gw3p0'); if(leg)leg.innerHTML=_legHTML(GW3P0_RUNS.map(([m,nm,c])=>({name:nm,color:c,dash:'solid'})),'runs (solid = train / top-eig · dotted = test / bottom-eig):');}
+  {const leg=document.getElementById('leg_gw3p0'); if(leg)_buildLegend(leg,'gw3p0',GW3P0_RUNS.map(([m,nm,c])=>({name:nm,color:c,dash:'solid'})),'runs (solid = train / top-eig · dotted = test / bottom-eig):',['p_gw3p0_loss','p_gw3p0_acc','p_gw3p0_sharp','p_gw3p0_qr','p_gw3p0_hq'],(i,pid)=>pid.endsWith('_sharp')?[i]:[2*i,2*i+1]);}
   const by={}; for(const r of (g.runs||[]))by[r.mode]=r;
   const doPair=(id,ka,kb)=>{const xs=[],ys=[];for(const[m] of GW3P0_RUNS){const r=by[m]||{};xs.push(r.it||[]);ys.push(r[ka]||[]);xs.push(r.it||[]);ys.push(r[kb]||[]);}try{Plotly.restyle(id,{x:xs,y:ys},xs.map((_,i)=>i));}catch(e){}};
   const doSingle=(id,k)=>{const xs=[],ys=[];for(const[m] of GW3P0_RUNS){const r=by[m]||{};xs.push(r.it||[]);ys.push(r[k]||[]);}try{Plotly.restyle(id,{x:xs,y:ys},xs.map((_,i)=>i));}catch(e){}};
@@ -3932,28 +3933,42 @@ function grokSelectAll(state){   // check/uncheck all ★grok panels ①–⑩ a
 function _gwColors(n){const out=[];for(let i=0;i<n;i++){const t=n>1?i/(n-1):0;out.push('rgb('+Math.round(30+215*t)+','+Math.round(90+60*Math.sin(Math.PI*t))+','+Math.round(210-170*t)+')');}return out;}
 function _gwExpLayout(title,ytitle,logY,yr){const L=baseLayout(title,ytitle,logY);L.showlegend=true;L.legend={font:{size:8},orientation:'h',x:0,y:-0.22,yanchor:'top'};L.margin={l:52,r:10,t:30,b:62};L.title.font={size:11};L.title.y=0.99;L.title.yanchor='top';if(yr)L.yaxis.range=yr;return L;}
 // Render one intervention panel (pfx='gw5'..'gw8'); data={axis,runs:[{x|name,it,ltr,lte,atr,ate,ps,align,ratio,grokIt}]}
-// ★ ONE common legend at the top of a grok panel (replaces the per-plot legends). series=[{name,color,dash}].
-function _legHTML(series,header){
-  return (header?`<span class="gwlbl">${header}</span>`:'')+series.map(s=>`<span class="gwlegit"><span class="gwsw" style="border-top-style:${s.dash==='dot'?'dotted':'solid'};border-top-color:${s.color}"></span>${s.name}</span>`).join('');
+// ★ ONE common, CLICKABLE legend at the top of a grok panel (replaces the per-plot legends). Clicking an item
+// toggles that series ON/OFF across EVERY plot in the panel (Plotly 'visible' → true / 'legendonly'). Visibility
+// persists across streaming re-renders via _gwLegVis[key]. series=[{name,color,dash}]; plots=[plotId,…];
+// tracesFor(i,plotId)=trace indices that legend item i controls in plotId (default [i]).
+window._gwLegVis=window._gwLegVis||{};
+function _buildLegend(leg,key,series,header,plots,tracesFor){
+  tracesFor=tracesFor||((i)=>[i]);
+  const vis=_gwLegVis[key]||(_gwLegVis[key]=[]); while(vis.length<series.length)vis.push(true);
+  const apply=()=>{for(const pid of (plots||[])){const g=document.getElementById(pid); if(!g||!g.data)continue;
+      const idx=[],val=[];
+      for(let i=0;i<series.length;i++)for(const ti of tracesFor(i,pid)){if(ti<g.data.length){idx.push(ti);val.push(vis[i]?true:'legendonly');}}
+      if(idx.length)try{Plotly.restyle(pid,{visible:val},idx);}catch(e){}}};
+  leg.innerHTML=(header?`<span class="gwlbl">${header}</span>`:'')+series.map((s,i)=>`<span class="gwlegit" data-i="${i}" style="cursor:pointer;user-select:none;opacity:${vis[i]?1:0.4}"><span class="gwsw" style="border-top-style:${s.dash==='dot'?'dotted':'solid'};border-top-color:${s.color}"></span>${s.name}</span>`).join('');
+  leg.querySelectorAll('.gwlegit').forEach(el=>{el.onclick=()=>{const i=+el.dataset.i;vis[i]=!vis[i];el.style.opacity=vis[i]?1:0.4;apply();};});
+  apply();
 }
-function _commonLegend(pfx,series,header){
+function _commonLegend(pfx,series,header,plots,tracesFor){
   const sec=document.getElementById('sec_'+pfx); if(!sec)return;
   let leg=document.getElementById('leg_'+pfx);
   if(!leg){leg=document.createElement('div');leg.id='leg_'+pfx;leg.className='gwleg';
     const cap=sec.querySelector('p.cap'); if(cap&&cap.parentNode)cap.parentNode.insertBefore(leg,cap.nextSibling); else sec.insertBefore(leg,sec.firstChild.nextSibling);}
-  leg.innerHTML=_legHTML(series,header);
+  _buildLegend(leg,pfx,series,header,plots,tracesFor);
 }
 function grokRenderExp(pfx,data,isCE){
   if(!data||!data.runs||!data.runs.length)return; const R=data.runs; const cols=_gwColors(R.length);
   const lab=r=>r.name!==undefined?r.name:(''+(Math.round(r.x*1000)/1000));
   // per-run colour index (r.cidx) + dash (r.dash) let grok-⑥ draw each α's unscaled·lr×α BASELINE in the SAME colour, dotted
-  const tr=(key)=>R.map((r,i)=>({x:r.it,y:r[key],mode:'lines'+((r.dash)?'':'+markers'),name:lab(r),line:{color:cols[(r.cidx!==undefined?r.cidx:i)],width:2,dash:(r.dash||'solid')},marker:{size:2},connectgaps:false}));
+  const _lv=_gwLegVis[pfx]||(_gwLegVis[pfx]=[]);   // per-run on/off from the common legend (persists across streaming re-renders)
+  const tr=(key)=>R.map((r,i)=>({x:r.it,y:r[key],mode:'lines'+((r.dash)?'':'+markers'),name:lab(r),line:{color:cols[(r.cidx!==undefined?r.cidx:i)],width:2,dash:(r.dash||'solid')},marker:{size:2},connectgaps:false,visible:(_lv[i]===false?'legendonly':true)}));
   // grok-⑤ tuned-Gaussian-init baseline: show the fitted (μ,σ) + its scaled lr ON TOP of every plot in this panel
   const _tn=data.tuned; const _tsuf=_tn?`  · tuned N(μ=${(+_tn.mu).toPrecision(3)}, σ=${(+_tn.sigma).toPrecision(3)}) · lr×(σref/σ)^${_tn.pow}=${(+_tn.lr).toPrecision(3)}`:'';
   const ssuf=(data.sigma!=null)?`  · init σ=${(+data.sigma).toPrecision(3)}`:'';   // ★ σ (init scale θ=σ·θ₀) on every plot title
   const tsuf=_tsuf+ssuf;
-  // ★ ONE common legend on top (per-plot legends turned OFF below)
-  _commonLegend(pfx,R.map((r,i)=>({name:lab(r),color:cols[(r.cidx!==undefined?r.cidx:i)],dash:(r.dash||'solid')})),(data.sigma!=null?('init σ='+(+data.sigma).toPrecision(3)):''));
+  // ★ ONE common, clickable legend on top (per-plot legends OFF; click toggles a run across all plots)
+  _commonLegend(pfx,R.map((r,i)=>({name:lab(r),color:cols[(r.cidx!==undefined?r.cidx:i)],dash:(r.dash||'solid')})),(data.sigma!=null?('init σ='+(+data.sigma).toPrecision(3)):''),
+    ['lte','ltr','ate','atr','ratio','mrgn','ps','align','jr23','jr45','jr67','jr89'].map(x=>'p_'+pfx+'_'+x),(i)=>[i]);
   const P=(id,key,title,yl,yr)=>{try{const L=_gwExpLayout(title+tsuf,yl,false,yr);L.showlegend=false;L.margin=Object.assign({},L.margin,{b:34});Plotly.react('p_'+pfx+'_'+id,tr(key),L);}catch(e){}};
   // Row 1 — losses & accuracies (grokking): test loss, train loss, test accuracy, train accuracy
   P('lte','lte','test loss vs iter','test loss');
@@ -3965,8 +3980,8 @@ function grokRenderExp(pfx,data,isCE){
   // mrgn = gᵀM_r g − gᵀJJᵀg (g=Jᵀr, r=Y−f): SIGNED-LOG y — grok-⑦ runs sharpen hugely (|·| from ~1e3 to ~1e27), so a
   // linear axis hides everything but iter-0; sgn·log₁₀(1+|·|) keeps the sign and shows every λ curve (Inf/NaN → gap).
   {const _sl=v=>(v==null||!isFinite(v))?null:Math.sign(v)*Math.log10(1+Math.abs(v));
-   const trM=R.map((r,i)=>({x:r.it,y:(r.mrgn||[]).map(_sl),mode:'lines'+((r.dash)?'':'+markers'),name:lab(r),line:{color:cols[(r.cidx!==undefined?r.cidx:i)],width:2,dash:(r.dash||'solid')},marker:{size:2},connectgaps:false}));
-   try{Plotly.react('p_'+pfx+'_mrgn',trM,_gwExpLayout('gᵀM_r g − gᵀJJᵀg (signed-log) vs iter'+tsuf,'sgn·log₁₀(1+|·|)',false));}catch(e){}}
+   const trM=R.map((r,i)=>({x:r.it,y:(r.mrgn||[]).map(_sl),mode:'lines'+((r.dash)?'':'+markers'),name:lab(r),line:{color:cols[(r.cidx!==undefined?r.cidx:i)],width:2,dash:(r.dash||'solid')},marker:{size:2},connectgaps:false,visible:(_lv[i]===false?'legendonly':true)}));
+   try{const Lm=_gwExpLayout('gᵀM_r g − gᵀJJᵀg (signed-log) vs iter'+tsuf,'sgn·log₁₀(1+|·|)',false);Lm.showlegend=false;Lm.margin=Object.assign({},Lm.margin,{b:34});Plotly.react('p_'+pfx+'_mrgn',trM,Lm);}catch(e){}}
   P('ps','ps','PS  λmax(∇²L) vs iter','λmax');
   P('align','align','J↔r alignment vs iter','|u₁ᵀr|/‖r‖',[0,1.02]);
   // Row 3 — residual ↔ NTK eigenvector PAIRS (u₂u₃ / u₄u₅ / u₆u₇ / u₈u₉)

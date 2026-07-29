@@ -4420,7 +4420,7 @@ def _gw3p0_iter(mode, th0, Xtr, Ytr, Xte, Yte, N, Nte, outD, steps, ev, lr, seed
         for k, val in zip(("ltr", "lte", "atr", "ate", "sharp", "qrTop", "qrBot", "hTop", "hBot"),
                           (ltr, lte, atr, ate, sharp, qt * scN, qb * scN, ht * scN, hb * scN)): rec[k].append(val)
     if mode == "true":
-        th = th0.detach().clone()
+        th = th0.detach().clone(); _lr = lr; _Lmin = [None]
         for t in range(steps + 1):
             if t % ev == 0 or t == steps:
                 otr = _TL.model.forward(th, Xtr); ltr = float(_TL.loss.value(otr, Ytr, N))
@@ -4428,17 +4428,19 @@ def _gw3p0_iter(mode, th0, Xtr, Ytr, Xte, Yte, N, Nte, outD, steps, ev, lr, seed
                 if Xte is not None:
                     ote = _TL.model.forward(th, Xte); lte = float(_TL.loss.value(ote, Yte, Nte))
                     ate = _bacc_vec(ote.reshape(-1)[:Nte * outD], Ytef, outD, Nte)
+                if _Lmin[0] is None or ltr < _Lmin[0]: _Lmin[0] = ltr
+                if ltr > 8.0 * max(_Lmin[0], 1e-9): _lr *= 0.5                  # ★ divergence guard: lr ↓ on blowup
                 rr = (-N * _TL.loss.resid_cotangent(otr, Ytr, N)).reshape(-1)[:M]; rc = rr.reshape(N, outD)
                 sharp = float(lanczos_extreme_vals(lambda v: hvpL(th, Xtr, Ytr, v), p, 1, min(p, 20), 0x5EED1)[0][0])
                 qt, qb = _blockslq_extremes(lambda v: hvpS(th, Xtr, v, rc), p)
                 ht, hb = _blockslq_extremes(lambda v: hvpS(th, Xtr, v, onesNC), p)
                 _emit(t, ltr, lte, atr, ate, sharp, qt, qb, ht, hb); yield rec
             if t < steps:
-                th = th - lr * _opt_dir(_TL.model, gradL(th, Xtr, Ytr)[0], "gd")
+                th = th - _lr * _opt_dir(_TL.model, gradL(th, Xtr, Ytr)[0], "gd")
                 if not torch.isfinite(th).all(): break
         return
     # ---- surrogate modes ----
-    ref = th0.detach().clone(); delta = torch.zeros_like(ref)
+    ref = th0.detach().clone(); delta = torch.zeros_like(ref); _lr = lr; _Lmin = [None]   # _lr adapts down on divergence
     ops = _gw3p0_ops(mode, ref, Xtr, N, outD, seed, lr_rank)
     opste = _gw3p0_ops(mode, ref, Xte, Nte, outD, seed, lr_rank) if Xte is not None else None
     for t in range(steps + 1):
@@ -4449,6 +4451,8 @@ def _gw3p0_iter(mode, th0, Xtr, Ytr, Xte, Yte, N, Nte, outD, steps, ev, lr, seed
         fhat = ops["f0"] + ops["jvp"](delta) + ops["quad"](delta); rhat = Ytrf - fhat
         if t % ev == 0 or t == steps:
             ltr = 0.5 * float((rhat ** 2).sum()) / N; atr = _bacc_vec(fhat, Ytrf, outD, N); lte = ate = None
+            if _Lmin[0] is None or ltr < _Lmin[0]: _Lmin[0] = ltr
+            if ltr > 8.0 * max(_Lmin[0], 1e-9): _lr *= 0.5                      # ★ divergence guard: lr ↓ when the surrogate loss blows up
             if opste is not None:
                 fte = opste["f0"] + opste["jvp"](delta) + opste["quad"](delta); rte = Ytef - fte
                 lte = 0.5 * float((rte ** 2).sum()) / Nte; ate = _bacc_vec(fte, Ytef, outD, Nte)
@@ -4462,7 +4466,7 @@ def _gw3p0_iter(mode, th0, Xtr, Ytr, Xte, Yte, N, Nte, outD, steps, ev, lr, seed
             _emit(t, ltr, lte, atr, ate, sharp, qt, qb, ht, hb); yield rec
         if t < steps:
             grad = -(1.0 / N) * (ops["vjp"](rhat) + ops["Mc"](delta, rhat))
-            delta = delta - lr * grad
+            delta = delta - _lr * grad
             if not torch.isfinite(delta).all(): break
 
 
@@ -4489,7 +4493,7 @@ def _grok_train_iter(th0, X, Y, Xte, Yte, steps, ev, N, Nte, outD, ce, step_fn, 
     LIVE. Same semantics as _grok_train otherwise; the last yielded rec (with grokIt) is complete."""
     import numpy as _np
     th = th0.clone(); rec = {k: [] for k in ("it", "ltr", "lte", "atr", "ate", "ps", "align", "ratio", "mrgn", "jr23", "jr45", "jr67", "jr89")}
-    grokIt = None; Y0 = Y; Yte0 = Yte; rec["grokIt"] = None
+    grokIt = None; Y0 = Y; Yte0 = Yte; rec["grokIt"] = None; _Lref = [None]   # running-min loss (divergence guard)
     use_mb = bool(batch) and 0 < int(batch) < N
     bs = int(batch)
     def _mb_idx(t):
@@ -4518,7 +4522,21 @@ def _grok_train_iter(th0, X, Y, Xte, Yte, steps, ev, N, Nte, outD, ce, step_fn, 
                     nth = mk_step(Xb, Y0[ii], bs)(th)
             else:
                 nth = (th - lr * _opt_dir(_TL.model, gradL(th, X, Yt)[0], "gd")) if yscale_fn is not None else step_fn(th)
-            if not torch.isfinite(nth).all(): break               # diverged ⇒ stop this run early
+            # ★ DIVERGENCE GUARD (adaptive lr, only when a run blows up): if the step would send the loss far above
+            #   the running-min (or to NaN), HALVE the step toward θ until it lands — kills the ~1e35 EoS oscillations
+            #   while leaving well-behaved runs untouched (the guard never triggers when the loss stays bounded).
+            try:
+                L0 = float(_TL.loss.value(_TL.model.forward(th, X), Yt, N))
+                if _Lref[0] is None or L0 < _Lref[0]: _Lref[0] = L0
+                ceil = 8.0 * max(_Lref[0], 1e-9) + 1e-9
+                for _ in range(9):
+                    if torch.isfinite(nth).all():
+                        Lp = float(_TL.loss.value(_TL.model.forward(nth, X), Yt, N))
+                        if Lp == Lp and Lp <= ceil: break
+                    nth = th + 0.5 * (nth - th)                    # shrink the step (adaptive lr ↓) toward the current θ
+            except Exception:
+                pass
+            if not torch.isfinite(nth).all(): break               # last resort: don't advance into NaN
             th = nth
 
 
@@ -5621,7 +5639,7 @@ def run_stream(P):
             # tick (t+ee>steps) fire together so nothing is dropped on short runs. _gw_fired set only on SUCCESS.
             _gw_fired = False
             g_gw1 = None
-            if gw1 and not gw1_done and (N * outD) <= grid3dcap and dataset != "owt" and Jc is not None and (not _gw_fired or (t + ee > steps)):
+            if gw1 and not gw1_done and (N * outD) <= grid3dcap and dataset != "owt" and Jc is not None and (not _gw_fired or (t + ee > steps)) and (not gw3 or gw3p0_done or (t + ee > steps)):
                 try:
                     th0s = th.detach().clone()
                     # WIDE log grid of init scales (default 100 points, σ ∈ 10^[-1.5,1.5] ≈ 0.03 … 32).
@@ -5682,7 +5700,7 @@ def run_stream(P):
                 gw8_done = True     # activation-swap is MLP-only ⇒ mark done so the data-rebuild guard resolves
 
             g_gw5 = None                                                          # ⑤ Initialization: sweep init scale σ
-            if gw5 and not gw5_done and _grokable and (not _gw_fired or (t + ee > steps)):
+            if gw5 and not gw5_done and _grokable and (not _gw_fired or (t + ee > steps)) and (not gw3 or gw3p0_done or (t + ee > steps)):
                 try:
                     th0g = _th_init0.detach().clone()   # sweep starts from the fresh init θ₀
                     sig = [float(10.0 ** (-0.8 + 1.6 * i / (gw_n - 1))) for i in range(gw_n)]   # σ ∈ [0.16, 6.3] log grid
@@ -5724,7 +5742,7 @@ def run_stream(P):
                     g_gw5 = None; gw5_done = True
 
             g_gw6 = None                                                          # ⑥ Output scaling: sweep a gain α on the TARGET LABELS Y
-            if gw6 and not gw6_done and _grokable and (not _gw_fired or (t + ee > steps)):
+            if gw6 and not gw6_done and _grokable and (not _gw_fired or (t + ee > steps)) and (not gw3 or gw3p0_done or (t + ee > steps)):
                 try:
                     th0g = (gw6init * _th_init0).detach().clone()   # small init θ=gw6init·θ₀
                     _af = max(1.0001, float(P.get("gw6arange", 4.0)))            # α range factor: sweep is log-symmetric α ∈ [1/_af, _af] around 1 (widened default 4 ⇒ 0.25…4; was 0.5…2)
@@ -5755,7 +5773,7 @@ def run_stream(P):
                     g_gw6 = None; gw6_done = True
 
             g_gw7 = None                                                          # ⑦ Optimization: sweep λ in the modified update
-            if gw7 and not gw7_done and _grokable and (not _gw_fired or (t + ee > steps)):
+            if gw7 and not gw7_done and _grokable and (not _gw_fired or (t + ee > steps)) and (not gw3 or gw3p0_done or (t + ee > steps)):
                 try:
                     th0g = (gw7init * _th_init0).detach().clone()   # small init θ=gw7init·θ₀
                     _lammax = float(P.get("gw7lammax", 10.0))                     # λ sweep upper end (default 10; UI knob)
@@ -5806,7 +5824,7 @@ def run_stream(P):
                     g_gw7 = None; gw7_done = True
 
             g_gw8 = None                                                          # ⑧ Architecture: sweep activation (complexity ladder)
-            if gw8 and not gw8_done and _grokable and isinstance(_TL.model, MlpModel) and (not _gw_fired or (t + ee > steps)):   # activation swap rebuilds the MLP spec ⇒ MLP only
+            if gw8 and not gw8_done and _grokable and isinstance(_TL.model, MlpModel) and (not _gw_fired or (t + ee > steps)) and (not gw3 or gw3p0_done or (t + ee > steps)):   # activation swap rebuilds the MLP spec ⇒ MLP only
                 saved_model = _TL.model                                           # restore point (bound BEFORE the try)
                 try:
                     th0g = (gw8init * _th_init0).detach().clone(); acts = ["relu", "gelu", "tanh", "sine", "bspline", "bsplinetuned"]   # relu→gelu→tanh→sine→LEARNED-spline→RATIO-TUNED-spline ladder
@@ -5845,7 +5863,7 @@ def run_stream(P):
                     _TL.model = saved_model                                       # ALWAYS restore the real model
 
             g_gw9 = None                                                          # ⑨ random-search on the top-M_r subspace + 2 subspace baselines (bottom-M_r, random) vs a GD baseline
-            if gw9 and not gw9_done and _grokable and (not _gw_fired or (t + ee > steps)):
+            if gw9 and not gw9_done and _grokable and (not _gw_fired or (t + ee > steps)) and (not gw3 or gw3p0_done or (t + ee > steps)):
                 try:
                     th0g = (gw9init * _th_init0).detach().clone()   # small init θ=gw9init·θ₀
                     def _rs_gen(md, refresh=gw9refresh):   # IDENTICAL random-search protocol, only the search subspace (and its refresh) differ (full-batch: needs the stable objective for accept/reject)
@@ -5865,7 +5883,7 @@ def run_stream(P):
                     g_gw9 = None; gw9_done = True
 
             g_gw10 = None                                                         # ⑩ subspace-traversal random-search on Qr (top/bottom/null/random-K), step maximizes rᵀf (no gradient), for k∈{1,3,5}
-            if gw10 and not gw10_done and _grokable and (not _gw_fired or (t + ee > steps)):
+            if gw10 and not gw10_done and _grokable and (not _gw_fired or (t + ee > steps)) and (not gw3 or gw3p0_done or (t + ee > steps)):
                 try:
                     th0g10 = (gw10init * _th_init0).detach().clone()              # init θ=gw10init·θ₀ (default = main run's init)
                     _g10specs = []; _g10gens = []                                 # 3 k × 4 modes = 12 sub-runs, streamed in lockstep
