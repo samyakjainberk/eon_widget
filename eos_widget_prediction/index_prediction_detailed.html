@@ -3893,7 +3893,7 @@ function gw10BuildPlots(){
 function renderGw10(g){
   gw10BuildPlots();
   {const g10plots=[];for(const K of GW10_KS)for(const s of ['ltr','lte','atr','ate','al1','al2','al3','al4'])g10plots.push('p_gw10_k'+K+'_'+s);
-   _commonLegend('gw10',GW10_RUNS.map(([m,nm,c])=>({name:nm,color:GW10_RUNCOL[m],dash:'solid'})),(g&&g.sigma!=null?('init σ='+(+g.sigma).toPrecision(3)):''),g10plots,(i)=>[i]);}
+   _commonLegend('gw10',GW10_RUNS.map(([m,nm,c])=>({name:nm,color:GW10_RUNCOL[m],dash:'solid'})),((g&&g.sigma!=null?('init σ='+(+g.sigma).toPrecision(3)+' · '):'')+'lr='+(+val('lr')).toPrecision(3)),g10plots,(i)=>[i]);}   // ★ σ + lr on the gw10 legend header
   const metrics=['ltr','lte','atr','ate','al1','al2','al3','al4'];
   for(const K of (g.ks||GW10_KS)){const blk=g.byk&&g.byk[String(K)];if(!blk||!blk.runs)continue;
     const byMode={};for(const r of blk.runs)byMode[r.mode]=r;   // order runs to match GW10_RUNS (top/bottom/null/rand)
@@ -3932,7 +3932,7 @@ function renderGw3p0(g){
   {const leg=document.getElementById('leg_gw3p0');
    const pairIds=['p_gw3p0_loss','p_gw3p0_acc','p_gw3p0_qr','p_gw3p0_hq'];
    const allIds=pairIds.concat(['p_gw3p0_sharp']); for(let i=1;i<=4;i++){allIds.push('p_gw3p0_nt'+i);allIds.push('p_gw3p0_mr'+i);}
-   if(leg)_buildLegend(leg,'gw3p0',GW3P0_RUNS.map(([m,nm,c])=>({name:nm,color:c,dash:'solid'})),'runs (solid = train / top-eig · dotted = test / bottom-eig):',allIds,(i,pid)=>pairIds.indexOf(pid)>=0?[2*i,2*i+1]:[i]);}
+   if(leg)_buildLegend(leg,'gw3p0',GW3P0_RUNS.map(([m,nm,c])=>({name:nm,color:c,dash:'solid'})),`init σ=${(+val('init')).toPrecision(3)} · lr=${(+val('lr')).toPrecision(3)}  ·  runs (solid = train / top-eig · dotted = test / bottom-eig):`,allIds,(i,pid)=>pairIds.indexOf(pid)>=0?[2*i,2*i+1]:[i]);}   // ★ Panel-0 trains from θ₀ (σ=main init) at the main lr
   const by={}; for(const r of (g.runs||[]))by[r.mode]=r;
   const doPair=(id,ka,kb)=>{const xs=[],ys=[];for(const[m] of GW3P0_RUNS){const r=by[m]||{};xs.push(r.it||[]);ys.push(r[ka]||[]);xs.push(r.it||[]);ys.push(r[kb]||[]);}try{Plotly.restyle(id,{x:xs,y:ys},xs.map((_,i)=>i));}catch(e){}};
   const doSingle=(id,k)=>{const xs=[],ys=[];for(const[m] of GW3P0_RUNS){const r=by[m]||{};xs.push(r.it||[]);ys.push(r[k]||[]);}try{Plotly.restyle(id,{x:xs,y:ys},xs.map((_,i)=>i));}catch(e){}};
@@ -3976,7 +3976,8 @@ function grokRenderExp(pfx,data,isCE){
   const tr=(key)=>R.map((r,i)=>({x:r.it,y:r[key],mode:'lines'+((r.dash)?'':'+markers'),name:lab(r),line:{color:cols[(r.cidx!==undefined?r.cidx:i)],width:2,dash:(r.dash||'solid')},marker:{size:2},connectgaps:false,visible:(_lv[i]===false?'legendonly':true)}));
   // grok-⑤ tuned-Gaussian-init baseline: show the fitted (μ,σ) + its scaled lr ON TOP of every plot in this panel
   const _tn=data.tuned; const _tsuf=_tn?`  · tuned N(μ=${(+_tn.mu).toPrecision(3)}, σ=${(+_tn.sigma).toPrecision(3)}) · lr×(σref/σ)^${_tn.pow}=${(+_tn.lr).toPrecision(3)}`:'';
-  const ssuf=(data.sigma!=null)?`  · init σ=${(+data.sigma).toPrecision(3)}`:'';   // ★ σ (init scale θ=σ·θ₀) on every plot title
+  const _lrv=(+val('lr')).toPrecision(3);   // ★ learning rate (from the run's restored params — works for loaded captures too)
+  const ssuf=(data.sigma!=null)?`  · init σ=${(+data.sigma).toPrecision(3)} · lr=${_lrv}`:`  · lr=${_lrv}`;   // ★ σ (init scale θ=σ·θ₀) + lr on every plot title (gw5 sweeps σ ⇒ per-run σ in the legend, lr shown here)
   const tsuf=_tsuf+ssuf;
   // ★ ONE common, clickable legend on top (per-plot legends OFF; click toggles a run across all plots)
   _commonLegend(pfx,R.map((r,i)=>({name:lab(r),color:cols[(r.cidx!==undefined?r.cidx:i)],dash:(r.dash||'solid')})),(data.sigma!=null?('init σ='+(+data.sigma).toPrecision(3)):''),
@@ -4446,6 +4447,11 @@ function gw14Note(m){   // ★grok-①②③④ diagnostics run on the MAIN run'
     if(on){
       if(owt) msg='— not produced: needs a scalar/vector task (not the language model)';
       else if(cap>0 && M>cap) msg=`— not produced: M = N·d_out = ${M} exceeds grid3dcap (${cap}). Lower #samples or raise the “grid3dcap” control.`;
+      else{   // ★ produced ⇒ show the init σ + lr being used (gw1 sweeps σ with a per-σ adaptive lr; gw2/3/4 use the main run's σ & lr)
+        const sg=(+val('init')).toPrecision(3), lr=(+val('lr')).toPrecision(3);
+        msg=(na==='gw1na')?`<span style="color:#475569;font-weight:400">· init σ swept (log grid) · lr per-σ adaptive (β·2/λmax)</span>`
+                          :`<span style="color:#475569;font-weight:400">· init σ=${sg} · lr=${lr}</span>`;
+      }
     }
     el.innerHTML=msg;
   }
