@@ -4611,46 +4611,31 @@ def _opt_step_taylor(X, Y, N, outD, lr, lam1, lam2):
 
 
 def _opt_step_sched(X, Y, N, outD, lr0, safety, rule, lam1, lam2, xval, sign):
-    """★grok-⑦ NEGATIVE-λ lr SCHEDULE (anti-self-stabilization). Progressive sharpening runs fastest at λ<0, so σ=λmax(∇²L)
-    blows up and the Edge-of-Stability SELF-STABILIZATION would kick in (oscillation caps σ at 2/η). To SEE the pure blowup
-    we hold σ JUST BELOW the edge: η_t = min(η₀, safety·2/σ_t) with safety<1. Rationale:
-      • η_t·σ_t = safety·2 < 2 ⇒ the top eigen-mode's GD factor |1−η·σ|=|1−2·safety|<1 ⇒ STABLE ⇒ no self-stabilization.
-      • η_t = η₀ while σ is small (σ < safety·2/η₀), so the schedule is INACTIVE until σ actually nears the edge — it
-        "kicks in only on blowup", exactly as asked.
-      • Once active, η shrinks only as 1/σ (as SLOWLY as possible while staying sub-edge) ⇒ never over-aggressive, so
-        learning keeps going. `safety` (→1) trades stability margin for larger η / faster learning.
-    σ_t is a warm-started power iteration on the loss Hessian ∇²L (few HVPs/step). Applies to BOTH rules (taylor/star)."""
-    p = _TL.model.p; st = {"u": _randvec16(p, 0x5EED1).to(dtype=DTYPE, device=_dev())}
-    def _sigma(th):
-        u = st["u"]
-        for _ in range(8):                                    # warm-started power iteration → λmax(∇²L) (persisted across steps)
-            v = hvpL(th, X, Y, u); nv = float(v.norm())
-            if not (nv == nv) or nv < 1e-30: return 0.0
-            u = v / nv
-        st["u"] = u
-        return abs(float(u @ hvpL(th, X, Y, u)))
+    """★grok-⑦ optimizer step at a FIXED learning rate (η=lr0 for every run — no σ-based lr schedule). The old version
+    set η_t = min(lr0, safety·2/σ_t) via a per-step power iteration on ∇²L; that adaptive schedule was BOTH expensive
+    (8 HVPs/step) and — combined with the divergent star rule — made every non-zero-λ run climb to its loss cap and
+    FREEZE (flat lines), which is why the loss looked "always increasing". Fixed η is what the user asked for.
+    ANTI-BLOWUP guard only (does NOT touch well-behaved steps): if the fixed-η step lands above a FIXED cap = 3·Lref
+    (Lref = the run's starting loss), backtrack η→η/2 up to 9× to get under the cap; if none do, FREEZE (return θ).
+    This bounds the STAR rule, which is really an lr-modulator (step = −η∇L·(1∓λ·⟨∇L,M_r∇L⟩/‖∇L‖²)) and REVERSES uphill
+    once |λ·curvature|>1 ⇒ diverges for |λ|≳0.2 — so over [−λmax,λmax] most star runs just hit the cap. The TAYLOR rule
+    (η²λ prefactor) stays sub-cap and DESCENDS for all λ ⇒ it is the sensible default for the [−10,10] sweep; the
+    λ-dependence then shows in the PS / ratio / alignment panels rather than as loss divergence. `safety` is unused now."""
+    st = {"Lref": None}
     def _apply(th, eta):
         return _opt_step_taylor(X, Y, N, outD, eta, lam1, lam2)(th) if rule == "taylor" else _opt_step_star(X, Y, N, outD, eta, xval, sign)(th)
     def step(th):
-        if st.get("Lref") is None:                               # FIXED reference: the loss at the run's start
+        if st["Lref"] is None:
             st["Lref"] = float(_TL.loss.value(_TL.model.forward(th, X), Y, N))
-        s = _sigma(th)
-        eta = min(lr0, safety * 2.0 / s) if s > 1e-9 else lr0     # HOLD σ·η = safety·2 < 2 once σ nears the edge; else η₀
-        ceil = 3.0 * max(st["Lref"], 1e-9)                       # ★FIXED cap = 3× the run's STARTING loss. The old `max(Lref, L0)`
-                                                                 #   included the CURRENT loss L0, so once a run drifted uphill the
-                                                                 #   ceiling tracked it upward — a COMPOUNDING feedback that let the
-                                                                 #   negative-λ star runs climb to ~1e3-1e5 (the observed blowup). A
-                                                                 #   truly fixed reference breaks that loop.
+        eta = lr0                                                # ★FIXED lr — same for every run, no σ schedule
+        ceil = 3.0 * max(st["Lref"], 1e-9)                       # FIXED cap (no compounding L0 term)
         thp = _apply(th, eta)
-        for _ in range(9):                                       # ANTI-BLOWUP backtrack: halve η until the step LANDS below the FIXED
-            if torch.isfinite(thp).all():                        #   ceiling. (σ / PS can still grow while it lands ⇒ sharpening shows.)
+        for _ in range(9):                                       # anti-blowup backtrack (only fires when a step exceeds the cap)
+            if torch.isfinite(thp).all():
                 Lp = float(_TL.loss.value(_TL.model.forward(thp, X), Y, N))
                 if Lp == Lp and Lp <= ceil: return thp
             eta *= 0.5; thp = _apply(th, eta)
-        return th                                                # ★FREEZE: no η kept the loss under the fixed ceiling ⇒ do NOT step.
-                                                                 #   Taking even the tiniest divergent step here compounds over the run
-                                                                 #   (verified: it re-blew to ~2e5); holding θ hard-bounds the loss at
-                                                                 #   the cap. Runs that genuinely descend never hit this (loss stays low).
+        return th                                                # FREEZE: no η holds it under the cap (only divergent star runs reach here)
     return step
 
 
@@ -7821,7 +7806,7 @@ def _parse_params(q):
         "gw6": g("gw6", "0") == "1",     # ★grok-⑥ Output-scaling sweep
         "gw6mode": g("gw6mode", "init"), "gw6arange": float(g("gw6arange", "4.0")),   # ⑥ "init"/"interval" + α range factor (α∈[1/f,f])
         "gw7": g("gw7", "0") == "1",     # ★grok-⑦ Optimizer-λ sweep
-        "gw7rule": g("gw7rule", "star"), "gw7sign": g("gw7sign", "plus"), "gw7lammax": float(g("gw7lammax", "10.0")),   # ⑦ rule (DEFAULT taylor / star) + ± sign + λ-sweep upper end
+        "gw7rule": g("gw7rule", "star"), "gw7sign": g("gw7sign", "plus"), "gw7lammax": float(g("gw7lammax", "0.2")),   # ⑦ rule (DEFAULT taylor / star) + ± sign + λ-sweep upper end
         "gw7sweep": g("gw7sweep", "mr"), "gw7lam1": float(g("gw7lam1", "1.0")), "gw7lam2": float(g("gw7lam2", "0.0")),   # ⑦ sweep mode DEFAULT mr = λ₂ only (M_r), λ₁ fixed=1 — also bias/gn/both + fixed λ₁ (JᵀJ) / λ₂ (M_r)
         "gw7n": int(g("gw7n", "21")),    # ⑦ FINE λ-grid point count (default 21 ⇒ step 1.0 over [−λmax,λmax]); forced odd so λ=0 is included
         "gw7schedsafety": float(g("gw7schedsafety", "0.9")),   # ⑦ negative-λ anti-self-stabilization lr schedule: keep σ·η = safety·2 below the EoS (2)
