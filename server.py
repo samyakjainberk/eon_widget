@@ -4338,10 +4338,132 @@ def _stream_runs(gens, build, which, min_emit_dt=0.0):
         for i in active:
             try: recs[i] = next(gens[i])
             except StopIteration: continue                       # run i done ⇒ recs[i] holds its final rec
+            except Exception: continue                           # a run erroring (e.g. OOM) drops out; others continue
             nxt.append(i)
         yield {"type": "gwstream", "which": which, "payload": build(recs)}
         active = nxt
     return recs
+
+
+# ===================== ★grok-③ Panel-0: quadratic-surrogate trainings (5 runs) =====================
+def _bacc_vec(out_flat, tgt_flat, outD, N):
+    """Balanced accuracy from a FLAT (M=N·outD) prediction vector (argmax for one-hot, sign for scalar ±1)."""
+    out = out_flat.reshape(N, outD); tgt = tgt_flat.reshape(N, outD)
+    if outD > 1:
+        pred = out.argmax(-1); true = tgt.argmax(-1)
+        recs = [float((pred[m] == c).float().mean()) for c in true.unique().tolist() for m in [(true == c)] if m.any()]
+        return float(sum(recs) / len(recs)) if recs else 0.0
+    ps = torch.sign(out).reshape(-1); ts = torch.sign(tgt).reshape(-1)
+    recs = [float((ps[m] == s).float().mean()) for s in (1.0, -1.0) for m in [(ts == s)] if m.any()]
+    return float(sum(recs) / len(recs)) if recs else 0.0
+
+
+def _blockslq_extremes(hvp, p, block=4, m=24, seed=0xB10C5):
+    """Top & bottom eigenvalue of a symmetric operator via BLOCK SLQ (block Lanczos) — Panel-0 spectra."""
+    try:
+        b = max(1, min(block, p))
+        T, bb, k = _block_lanczos_core(hvp, p, b, min(max(1, p // b), m), seed)
+        mu, _ = _safe_eigh(T)
+        return float(mu.max()), float(mu.min())
+    except Exception:
+        return 0.0, 0.0
+
+
+def _gw3p0_ops(mode, th_ref, X, N, outD, seed, lr_rank):
+    """Order-2 quadratic-surrogate operators at reference θ_ref (VALIDATED: f̂=f₀+J₀δ+½δᵀQₖδ,
+    ∇L̂=−(1/N)(J₀ᵀr̂+M_r̂δ)). Q per mode: evolve/fix = true Φ(θ_ref); rand = iid-Gaussian per-output (shared
+    fallback if the (M,p,p) tensor won't fit); lowrank = shared basis U(p×r) + per-output diagonals D ⇒
+    Q_r=Σr̂ₖQₖ is rank ≤ r (Frobenius-matched to the true Q scale)."""
+    M = N * outD; p = th_ref.numel()
+    def _f(th): return _TL.model.forward(th, X).reshape(-1)[:M]
+    f0 = _f(th_ref)
+    def jvp(v): return (_f(th_ref + EPS * v) - _f(th_ref - EPS * v)) / (2 * EPS)            # J₀v (M,)
+    def vjp(w): return _TL.model.vjp(th_ref, X, w.reshape(N, outD))[0][:p]                  # J₀ᵀw (p,)
+    if mode in ("evolve", "fix"):
+        def Qz(z): return (jac_cols(th_ref + EPS * z, X)[0][:M] - jac_cols(th_ref - EPS * z, X)[0][:M]) / (2 * EPS)  # [Qₖz] (M,p)
+        def Mc(v, c): return hvpS(th_ref, X, v, c.reshape(N, outD))                          # ΣcₖQₖv (p,)
+    elif mode == "rand":
+        if M * p * p <= 2.0e8:
+            Q = _build_randQ(th_ref, X, M, "gauss", seed, 4)                                 # per-output iid-Gaussian (M,p,p)
+            def Qz(z): return (Q @ z.to(Q.dtype)).to(z.dtype)
+            def Mc(v, c): return torch.einsum('m,mpq,q->p', c.to(Q.dtype), Q, v.to(Q.dtype)).to(v.dtype)
+        else:
+            S = _build_shared_randQ(th_ref, X, M, "gauss", seed, 4)                          # shared (p,p) fallback (large models)
+            def Qz(z): sz = S @ z; return sz.unsqueeze(0).expand(M, -1)
+            def Mc(v, c): return float(c.sum()) * (S @ v)
+    else:  # lowrank
+        r = max(2, min(p, int(lr_rank)))
+        g = torch.Generator(device=_dev()); g.manual_seed((int(seed) ^ 0x10CA1) & 0x7FFFFFFF)
+        U, _ = torch.linalg.qr(torch.randn(p, r, generator=g, dtype=DTYPE, device=_dev()))
+        D = torch.randn(M, r, generator=g, dtype=DTYPE, device=_dev())
+        try:
+            tf = _q_frozen_fro2(th_ref, X, M, 4, (int(seed) ^ 0x5F3759DF) & 0x7FFFFFFF)       # (M,) true ‖Qₖ‖²
+            D = D * (tf.clamp_min(0).sqrt() / (D ** 2).sum(1).clamp_min(1e-30).sqrt()).reshape(M, 1)
+        except Exception: pass
+        def Qz(z): ud = U.t() @ z; return (D * ud) @ U.t()                                    # (M,p)
+        def Mc(v, c): return U @ ((D.t() @ c) * (U.t() @ v))                                  # (p,)
+    def quad(delta): return 0.5 * (Qz(delta) * delta).sum(1)                                 # (M,) = ½δᵀQₖδ
+    return {"f0": f0, "jvp": jvp, "vjp": vjp, "Qz": Qz, "Mc": Mc, "quad": quad, "M": M, "p": p}
+
+
+def _gw3p0_iter(mode, th0, Xtr, Ytr, Xte, Yte, N, Nte, outD, steps, ev, lr, seed, reexp, lr_rank):
+    """One Panel-0 run (generator; yields the growing rec). mode='true' trains the REAL net; else trains the
+    quadratic surrogate (evolve re-expands the ENTIRE Taylor at θ_now every `reexp` steps; fix/rand/lowrank
+    freeze Q). Records {it, ltr,lte,atr,ate, sharp=λmax(∇²L̂), qrTop/qrBot=Q_r extremes, hTop/hBot=ΣQ extremes}
+    — all curvature on the ÷N scale; Q_r/ΣQ extremes via BLOCK SLQ."""
+    p = th0.numel(); M = N * outD; scN = 1.0 / max(N, 1)
+    rec = {k: [] for k in ("it", "ltr", "lte", "atr", "ate", "sharp", "qrTop", "qrBot", "hTop", "hBot")}
+    Ytrf = Ytr.reshape(-1)[:M]; Ytef = (Yte.reshape(-1)[:Nte * outD] if Yte is not None else None)
+    onesNC = torch.ones(N, outD, dtype=DTYPE, device=_dev()); onesM = onesNC.reshape(-1)
+    def _emit(t, ltr, lte, atr, ate, sharp, qt, qb, ht, hb):
+        rec["it"].append(t)
+        for k, val in zip(("ltr", "lte", "atr", "ate", "sharp", "qrTop", "qrBot", "hTop", "hBot"),
+                          (ltr, lte, atr, ate, sharp, qt * scN, qb * scN, ht * scN, hb * scN)): rec[k].append(val)
+    if mode == "true":
+        th = th0.detach().clone()
+        for t in range(steps + 1):
+            if t % ev == 0 or t == steps:
+                otr = _TL.model.forward(th, Xtr); ltr = float(_TL.loss.value(otr, Ytr, N))
+                atr = _bacc_vec(otr.reshape(-1)[:M], Ytrf, outD, N); lte = ate = None
+                if Xte is not None:
+                    ote = _TL.model.forward(th, Xte); lte = float(_TL.loss.value(ote, Yte, Nte))
+                    ate = _bacc_vec(ote.reshape(-1)[:Nte * outD], Ytef, outD, Nte)
+                rr = (-N * _TL.loss.resid_cotangent(otr, Ytr, N)).reshape(-1)[:M]; rc = rr.reshape(N, outD)
+                sharp = float(lanczos_extreme_vals(lambda v: hvpL(th, Xtr, Ytr, v), p, 1, min(p, 20), 0x5EED1)[0][0])
+                qt, qb = _blockslq_extremes(lambda v: hvpS(th, Xtr, v, rc), p)
+                ht, hb = _blockslq_extremes(lambda v: hvpS(th, Xtr, v, onesNC), p)
+                _emit(t, ltr, lte, atr, ate, sharp, qt, qb, ht, hb); yield rec
+            if t < steps:
+                th = th - lr * _opt_dir(_TL.model, gradL(th, Xtr, Ytr)[0], "gd")
+                if not torch.isfinite(th).all(): break
+        return
+    # ---- surrogate modes ----
+    ref = th0.detach().clone(); delta = torch.zeros_like(ref)
+    ops = _gw3p0_ops(mode, ref, Xtr, N, outD, seed, lr_rank)
+    opste = _gw3p0_ops(mode, ref, Xte, Nte, outD, seed, lr_rank) if Xte is not None else None
+    for t in range(steps + 1):
+        if mode == "evolve" and t > 0 and reexp > 0 and (t % reexp == 0):     # re-do the ENTIRE Taylor at θ_now
+            ref = (ref + delta).detach().clone(); delta = torch.zeros_like(ref)
+            ops = _gw3p0_ops(mode, ref, Xtr, N, outD, seed, lr_rank)
+            opste = _gw3p0_ops(mode, ref, Xte, Nte, outD, seed, lr_rank) if Xte is not None else None
+        fhat = ops["f0"] + ops["jvp"](delta) + ops["quad"](delta); rhat = Ytrf - fhat
+        if t % ev == 0 or t == steps:
+            ltr = 0.5 * float((rhat ** 2).sum()) / N; atr = _bacc_vec(fhat, Ytrf, outD, N); lte = ate = None
+            if opste is not None:
+                fte = opste["f0"] + opste["jvp"](delta) + opste["quad"](delta); rte = Ytef - fte
+                lte = 0.5 * float((rte ** 2).sum()) / Nte; ate = _bacc_vec(fte, Ytef, outD, Nte)
+            Qzd = ops["Qz"](delta)
+            def _JV(v): return ops["jvp"](v) + Qzd @ v
+            def _JT(w): return ops["vjp"](w) + ops["Mc"](delta, w)
+            def _H(v): return (_JT(_JV(v)) - ops["Mc"](v, rhat)) / N          # ∇²L̂ v = (Ĵᵀ Ĵ v − M_r̂ v)/N
+            sharp = float(lanczos_extreme_vals(_H, p, 1, min(p, 20), 0x5EED1)[0][0])
+            qt, qb = _blockslq_extremes(lambda v: ops["Mc"](v, rhat), p)       # Q_r = Σ r̂ₖ Qₖ
+            ht, hb = _blockslq_extremes(lambda v: ops["Mc"](v, onesM), p)      # ΣQ = Σ Qₖ
+            _emit(t, ltr, lte, atr, ate, sharp, qt, qb, ht, hb); yield rec
+        if t < steps:
+            grad = -(1.0 / N) * (ops["vjp"](rhat) + ops["Mc"](delta, rhat))
+            delta = delta - lr * grad
+            if not torch.isfinite(delta).all(): break
 
 
 def _grok_train(th0, X, Y, Xte, Yte, steps, ev, N, Nte, outD, ce, step_fn, yscale_fn=None, lr=None,
@@ -4795,7 +4917,7 @@ def run_stream(P):
     gw4h_refs = {}                          # ★grok-④ (H version): same, but for the UNWEIGHTED function Hessian H=Σ_i Q_i
     gwdiag_th = None                        # ★grok-②③④: small-init SHADOW trajectory (gwdiaginit·θ₀, plain GD) the diagnostics analyze (gwdiaginit=1 ⇒ main run)
     gw1_done = False                        # ★grok-①: one-shot init-scale sweep guard
-    gw5_done = gw6_done = gw7_done = gw8_done = gw9_done = gw10_done = False   # ★grok-⑤⑥⑦⑧⑨⑩: one-shot intervention-sweep guards
+    gw5_done = gw6_done = gw7_done = gw8_done = gw9_done = gw10_done = gw3p0_done = False   # ★grok-⑤⑥⑦⑧⑨⑩ + ③Panel-0: one-shot guards
     eds_hist = []              # EARLY-DYNAMICS (s42): rolling buffer of the last ~11 ticks' {t, h, mr} top-K eigenspaces, for the mean principal angle at lags {1,2,5,10}
     sec27_state = None         # §27: _Sec27State (rolling 101 vector-sets + sign refs), created lazily on the first §27 step
     sec27_prev = None          # §27: previous step's {r, J} for the discrete ṙ/J̇ gradient vectors
@@ -5432,37 +5554,7 @@ def run_stream(P):
                              "ntk": ntk,                                          # {ev,fx,rd,lr} — 4 J-variants (evolving/init-fixed/random/random-low-rank)
                              "gn": {"cg": cg, "gp1": gp1, "gp2": gp2, "gp3": gp3, "gp4": gp4, "ng": ng},
                              "mr": mr}
-                    # ---- Panel-0 (EVOLUTION time-series, rendered FIRST): loss, sharpness λmax(∇²L), and the top⊕bottom
-                    #   eigenvalue of M_r=Σ_i r_iQ_i (Qr) and of the UNWEIGHTED Σ_i Q_i — all curvature terms on the ÷N
-                    #   (per-sample) scale where 2/η lives, so sharpness and the eigenvalues are directly comparable. ----
-                    try:
-                        _mrmu = mu_ev if mu_ev else [0.0]
-                        mrTop = float(_mrmu[0]) * scN; mrBot = float(_mrmu[-1]) * scN
-                        oc3 = torch.ones(N, outD, dtype=Jm3.dtype, device=_dev())                 # all-ones cotangent ⇒ Σ_i Q_i (unweighted)
-                        _Qbh, _Th, _kh = _lanczos_core(lambda v: hvpS(th, X, v, oc3), p, mlan, 0, dt=Jm3.dtype, q0=q0g)
-                        _muh, _ = _safe_eigh(_Th); hTop = float(_muh.max()) * scN; hBot = float(_muh.min()) * scN
-                        _u = _randvec16(p, 0x5EED1).to(dtype=Jm3.dtype, device=_dev())             # power iteration → λmax(∇²L) = sharpness
-                        for _ in range(10):
-                            _v = hvpL(th, X, Y, _u); _nv = float(_v.norm())
-                            if not (_nv == _nv) or _nv < 1e-30: break
-                            _u = _v / _nv
-                        _sharp = abs(float(_u @ hvpL(th, X, Y, _u)))
-                        _otr = _TL.model.forward(th, X); _lval = float(_TL.loss.value(_otr, Y, N))
-                        def _bacc(out, tgt):
-                            if out.dim() >= 2 and out.shape[-1] > 1:
-                                pred = out.argmax(-1); true = tgt.argmax(-1)
-                                recs = [float((pred[m] == c).float().mean()) for c in true.unique().tolist() for m in [(true == c)] if m.any()]
-                                return float(sum(recs) / len(recs)) if recs else 0.0
-                            ps = torch.sign(out).reshape(-1); ts = torch.sign(tgt).reshape(-1)
-                            recs = [float((ps[m] == s).float().mean()) for s in (1.0, -1.0) for m in [(ts == s)] if m.any()]
-                            return float(sum(recs) / len(recs)) if recs else 0.0
-                        _atr = _bacc(_otr, Y); _lte = None; _ate = None
-                        if Xtest is not None:
-                            _ote = _TL.model.forward(th, Xtest); _lte = float(_TL.loss.value(_ote, Ytest, Ntest)); _ate = _bacc(_ote, Ytest)
-                        g_gw3["evo"] = {"loss": _lval, "lte": _lte, "atr": _atr, "ate": _ate,
-                                        "sharp": _sharp, "mrTop": mrTop, "mrBot": mrBot, "hTop": hTop, "hBot": hBot}
-                    except Exception:
-                        pass
+                    # (Panel-0 is now the one-shot 5-run quadratic-surrogate experiment g_gw3p0, streamed separately.)
                     if t % gw3specevery == 0 or t == steps:                          # throttled SLQ M_r spectrum per mode (client plots |λ| log-log)
                         try:
                             spec = {}
@@ -5792,6 +5884,22 @@ def run_stream(P):
                     gw10_done = True; _gw_fired = True
                 except Exception:
                     g_gw10 = None; gw10_done = True
+
+            g_gw3p0 = None                                                        # ★grok-③ Panel-0: 5 quadratic-surrogate trainings (true / evolving-re-expand / fixed-init / random / low-rank Q)
+            if gw3 and not gw3p0_done and (N * outD) <= grid3dcap and dataset != "owt" and Jc is not None and (t + ee > steps):
+                try:
+                    _th0p = _th_init0.detach().clone()
+                    _reexp = max(1, int(P.get("gw3p0reexp", 25))); _lrrank = max(2, int(P.get("gw3p0rank", 8)))
+                    _p0specs = [("true", "true (no Taylor)"), ("evolve", f"evolving Q (re-expand/{_reexp})"),
+                                ("fix", "fixed-init Q"), ("rand", "random Q"), ("lowrank", "random low-rank Q")]
+                    _p0gens = [_gw3p0_iter(md, _th0p.detach().clone(), X, Y, Xtest, Ytest, N, Ntest, outD,
+                                           gw_steps, gw_ev, lr, int(P["seed"]), _reexp, _lrrank) for md, _ in _p0specs]
+                    def _buildp0(recs, _t=t):
+                        return {"t": _t, "runs": [{"mode": _p0specs[i][0], "name": _p0specs[i][1], **(recs[i] or {})} for i in range(len(_p0specs))]}
+                    _p0final = yield from _stream_runs(_p0gens, _buildp0, "gw3p0")   # LIVE
+                    g_gw3p0 = _buildp0(_p0final); gw3p0_done = True
+                except Exception:
+                    g_gw3p0 = None; gw3p0_done = True
 
             # EARLY-DYNAMICS STATS (s42) — NOT a prediction. Plot 1: σ-weighted projection of Jᵀr onto the ±M_r
             #   eigenvectors, split by eigenvalue sign — posSum=Σ_{λ_i>0, top-K}|λ_i·(v_i·Jᵀr)|/‖Jᵀr‖, negSum the
@@ -6907,6 +7015,7 @@ def run_stream(P):
                 "g_gw8": g_gw8,                                # ★grok-⑧ Activation sweep (runs carry a 'name')
                 "g_gw9": g_gw9,                                # ★grok-⑨ random-search-on-M_r-subspace vs GD baseline (2 named runs)
                 "g_gw10": g_gw10,                             # ★grok-⑩ subspace-traversal random-search on Qr (top/bottom/null/random-K) × k∈{1,3,5}
+                "g_gw3p0": g_gw3p0,                           # ★grok-③ Panel-0: 5 quadratic-surrogate trainings (true/evolving/fixed/random/low-rank Q)
                 "g27": g27,                                    # §27: sliding-window 3D subspace projection of the six ∇θ gradient-vectors (50-step lag)
                 "g27x": g27x,                                  # §7 extra panel: per-step cosine similarities + norms of {∇‖g‖², g, ∇‖J‖², J·ṙ, J̇·r, ∇‖J̇‖²}
                 "g28": g28,                                    # §28: TIMESCALES — panel 1 (5 J/r rate ratios, exact) + panel 2 (5 Q-Hessian rate ratios, Hutchinson)

@@ -788,8 +788,8 @@ Each line “$i\!\cdot\!j$” is $\cos\angle(\text{vector }i,\text{vector }j)\in
   <label style="font-size:13px"><input type="checkbox" class="gw3mode" value="lr"> <b style="color:#d98a17">random-low-rank</b></label>
   <span style="flex:1;min-width:200px;display:flex;align-items:center;gap:8px"><span style="font-size:13px;color:#475569">snapshot</span><input id="gw3_slider" type="range" min="0" max="0" value="0" step="1" style="flex:1"> <span id="gw3_step" style="color:#6b7280;font-size:12px;min-width:120px"></span></span>
 </div>
-<h3 style="margin:8px 0 2px;font-size:14px;color:#475569">Panel 0 — <b>evolution over training</b>: (left) train+test loss, sharpness $\lambda_{\max}(\nabla^2 L)$, top⊕bottom eigenvalue of $Q_r=\sum_i r_iQ_i$ and of the unweighted $\sum_i Q_i$; (right) train+test accuracy <span style="font-weight:400;color:#94a3b8">(curvature on the $\div N$ scale where $2/\eta$ lives; losses on the right axis of the left plot)</span></h3>
-<div class="plotrow row2"><div id="p_gw3_evo" class="plot" style="height:300px"></div><div id="p_gw3_evo_acc" class="plot" style="height:300px"></div></div>
+<h3 style="margin:8px 0 2px;font-size:14px;color:#475569">Panel 0 — <b>5 trainings under a quadratic (2nd-order Taylor) model</b>, from the same init: <b style="color:#111827">true (no Taylor)</b> · <b style="color:#0f9d8f">evolving Q (re-expand/25)</b> · <b style="color:#2563eb">fixed-init Q</b> · <b style="color:#d97706">random Q</b> · <b style="color:#7c3aed">low-rank Q</b>. Five plots (train+test loss, sharpness $\lambda_{\max}(\nabla^2L)$, $Q_r$ top⊕bottom, $\sum Q$ top⊕bottom, train+test acc), each overlaying all five runs. Eigenvalues via <b>block SLQ</b>, on the $\div N$ scale. Live-streamed; fires once with grok-③.</h3>
+<div id="gw3p0_blocks"></div>
 <h3 style="margin:8px 0 2px;font-size:14px;color:#475569">Panel 1 — residual $r$ ↔ top-$K$⊕bottom-$K$ NTK eigenvectors (per <b>J</b>-variant: evolving $J(\theta_t)$ / init-fixed $J(\theta_0)$ / random $J$ / random-low-rank $J$)</h3>
 <div class="plotrow row4"><div id="p_gw3_n1" class="plot" style="height:250px"></div><div id="p_gw3_n2" class="plot" style="height:250px"></div><div id="p_gw3_n3" class="plot" style="height:250px"></div><div id="p_gw3_n4" class="plot" style="height:250px"></div></div>
 <h3 style="margin:12px 0 2px;font-size:14px;color:#475569">Panel 2 — $J\!\cdot\!r$ ↔ top-$K$⊕bottom-$K$ $M_r$ eigenvectors (per Q-mode)</h3>
@@ -3847,7 +3847,7 @@ function gw3RenderSpec(i){       // redraw the §6 bar panels for snapshot i (NT
    const L=Object.assign({},g.layout);L.xaxis=Object.assign({},L.xaxis,{type:lg?'log':'linear'});L.xaxis.title={text:lg?'rank+1 (eigenvalues, high→low)':'rank (eigenvalues, high→low)'};L.yaxis=Object.assign({},L.yaxis,{type:'linear'});L.yaxis.title={text:lg?'sign(λ)·log₁₀(1+|λ|/λref) (M_r)':'eigenvalue λ (M_r)'};try{Plotly.react('p_gw3_spec',tr.length?tr:[{x:[],y:[]}],L);}catch(e){}}}
   const st=document.getElementById('gw3_step');if(st)st.textContent='step '+S.t+' · snapshot '+(i+1)+'/'+GW3_SNAP.length;
 }
-function toggleGw3(){const cb=document.getElementById('engw3'),el=document.getElementById('sec_gw3');if(!cb||!el)return;el.style.display=cb.checked?'block':'none';if(cb.checked)requestAnimationFrame(()=>{for(const id of ['p_gw3_evo','p_gw3_evo_acc','p_gw3_n1','p_gw3_n2','p_gw3_n3','p_gw3_n4','p_gw3_m1','p_gw3_m2','p_gw3_m3','p_gw3_m4','p_gw3_g1','p_gw3_g2','p_gw3_g3','p_gw3_g4','p_gw3_spec']){const g=document.getElementById(id);if(g&&g._fullLayout){try{Plotly.Plots.resize(g);}catch(e){}}}});}
+function toggleGw3(){const cb=document.getElementById('engw3'),el=document.getElementById('sec_gw3');if(!cb||!el)return;el.style.display=cb.checked?'block':'none';if(cb.checked)requestAnimationFrame(()=>{for(const id of ['p_gw3p0_loss','p_gw3p0_acc','p_gw3p0_sharp','p_gw3p0_qr','p_gw3p0_hq','p_gw3_n1','p_gw3_n2','p_gw3_n3','p_gw3_n4','p_gw3_m1','p_gw3_m2','p_gw3_m3','p_gw3_m4','p_gw3_g1','p_gw3_g2','p_gw3_g3','p_gw3_g4','p_gw3_spec']){const g=document.getElementById(id);if(g&&g._fullLayout){try{Plotly.Plots.resize(g);}catch(e){}}}});}
 {const sl=document.getElementById('gw3_slider');if(sl)sl.addEventListener('input',()=>gw3RenderSpec(+sl.value));
  document.querySelectorAll('.gw3mode').forEach(c=>c.addEventListener('change',()=>{const sl=document.getElementById('gw3_slider');gw3RenderSpec(sl?+sl.value:GW3_SNAP.length-1);}));}
 function toggleGw4(){const cb=document.getElementById('engw4'),el=document.getElementById('sec_gw4');if(!cb||!el)return;el.style.display=cb.checked?'block':'none';if(cb.checked)requestAnimationFrame(()=>{for(const id of ['p_gw4_r0','p_gw4_r1','p_gw4_r2','p_gw4_r3','p_gw4h_r0','p_gw4h_r1','p_gw4h_r2','p_gw4h_r3']){const g=document.getElementById(id);if(g&&g._fullLayout){try{Plotly.Plots.resize(g);}catch(e){}}}});}
@@ -3894,6 +3894,31 @@ function renderGw10(g){
     for(const s of metrics){const id='p_gw10_k'+K+'_'+s;if(!document.getElementById(id))continue;
       const xs=[],ys=[];for(const[m]of GW10_RUNS){const r=byMode[m]||{};xs.push(r.it||[]);ys.push(r[s]||[]);}
       try{Plotly.restyle(id,{x:xs,y:ys},[0,1,2,3]);}catch(e){}}}
+}
+// ★grok-③ Panel-0 — 5 quadratic-surrogate trainings, 5 overlaid plots (loss / acc / sharpness / Q_r / ΣQ)
+const GW3P0_RUNS=[['true','true (no Taylor)','#111827'],['evolve','evolving Q','#0f9d8f'],['fix','fixed-init Q','#2563eb'],['rand','random Q','#d97706'],['lowrank','low-rank Q','#7c3aed']];
+function _gw3p0Ids(){return ['p_gw3p0_loss','p_gw3p0_acc','p_gw3p0_sharp','p_gw3p0_qr','p_gw3p0_hq'];}
+function gw3p0BuildPlots(){
+  const host=document.getElementById('gw3p0_blocks'); if(!host||host._built)return; host._built=true;
+  host.innerHTML='<div class="plotrow row3"><div id="p_gw3p0_loss" class="plot" style="height:260px"></div>'+
+    '<div id="p_gw3p0_acc" class="plot" style="height:260px"></div><div id="p_gw3p0_sharp" class="plot" style="height:260px"></div></div>'+
+    '<div class="plotrow row2"><div id="p_gw3p0_qr" class="plot" style="height:270px"></div><div id="p_gw3p0_hq" class="plot" style="height:270px"></div></div>';
+  const lay=(title,yl,rng)=>{const L=_gwExpLayout(title,yl,false);L.showlegend=true;L.legend={font:{size:8},orientation:'h',x:0,y:-0.24,yanchor:'top'};if(rng)L.yaxis.range=rng;return L;};
+  const pair=(d2)=>{const tr=[];for(const[m,nm,c] of GW3P0_RUNS){tr.push({x:[],y:[],mode:'lines',name:nm,line:{color:c,width:1.8}});tr.push({x:[],y:[],mode:'lines',name:nm+' ('+d2+')',line:{color:c,width:1.4,dash:'dot'}});}return tr;};
+  const single=()=>{const tr=[];for(const[m,nm,c] of GW3P0_RUNS)tr.push({x:[],y:[],mode:'lines',name:nm,line:{color:c,width:1.8}});return tr;};
+  newP('p_gw3p0_loss',pair('test'),lay('train (solid) + test (dot) loss','loss'));
+  newP('p_gw3p0_acc',pair('test'),lay('train (solid) + test (dot) accuracy','balanced acc',[0,1.02]));
+  newP('p_gw3p0_sharp',single(),lay('sharpness λmax(∇²L̂) (÷N)','sharpness'));
+  newP('p_gw3p0_qr',pair('bottom'),lay('Q_r=Σr̂ₖQₖ · top (solid) ⊕ bottom (dot) eig (block SLQ, ÷N)','λ'));
+  newP('p_gw3p0_hq',pair('bottom'),lay('ΣQ=ΣₖQₖ · top (solid) ⊕ bottom (dot) eig (block SLQ, ÷N)','λ'));
+}
+function renderGw3p0(g){
+  gw3p0BuildPlots();
+  const by={}; for(const r of (g.runs||[]))by[r.mode]=r;
+  const doPair=(id,ka,kb)=>{const xs=[],ys=[];for(const[m] of GW3P0_RUNS){const r=by[m]||{};xs.push(r.it||[]);ys.push(r[ka]||[]);xs.push(r.it||[]);ys.push(r[kb]||[]);}try{Plotly.restyle(id,{x:xs,y:ys},xs.map((_,i)=>i));}catch(e){}};
+  const doSingle=(id,k)=>{const xs=[],ys=[];for(const[m] of GW3P0_RUNS){const r=by[m]||{};xs.push(r.it||[]);ys.push(r[k]||[]);}try{Plotly.restyle(id,{x:xs,y:ys},xs.map((_,i)=>i));}catch(e){}};
+  doPair('p_gw3p0_loss','ltr','lte'); doPair('p_gw3p0_acc','atr','ate'); doSingle('p_gw3p0_sharp','sharp');
+  doPair('p_gw3p0_qr','qrTop','qrBot'); doPair('p_gw3p0_hq','hTop','hBot');
 }
 function grokSelectAll(state){   // check/uncheck all ★grok panels ①–⑩ and fire their show/hide toggles
   for(let i=1;i<=10;i++){const cb=document.getElementById('engw'+i);if(!cb)continue;cb.checked=state;const fn=window['toggleGw'+i];if(typeof fn==='function')try{fn();}catch(e){}}}
@@ -4055,20 +4080,7 @@ function initLivePlots(n,kth,nResid,thr,n7,n8,multi){
    gw3bar('p_gw3_m1','M_r · |cos(u_i,Jr)|','|cos|');gw3bar('p_gw3_m2','M_r · |⟨u_i,Jr⟩|','|⟨·⟩|');gw3bar('p_gw3_m3','M_r · λ_i·|cos|','');gw3bar('p_gw3_m4','M_r · λ_i·|⟨·⟩|','');
    gw3bar('p_gw3_g1','GN · |cos(z_i,Jr)|','|cos|');gw3bar('p_gw3_g2','GN · |⟨z_i,Jr⟩|','|⟨·⟩|');gw3bar('p_gw3_g3','GN · c_i·|cos|','');gw3bar('p_gw3_g4','GN · c_i·|⟨·⟩|','');
    {const L=slqLayout('SLQ spectrum of M_r (sorted scree) — per Q-mode');L.showlegend=true;L.legend={font:{size:9},orientation:'h',x:0,y:1.1};newP('p_gw3_spec',[{x:[],y:[]}],L);}
-   // Panel 0 — evolution time-series. LEFT: train+test loss (right axis) + sharpness + Q_r & ΣQ extreme eigenvalues (left axis, ÷N). RIGHT: train+test accuracy.
-   {const L=baseLayout('evolution: train+test loss · sharpness λmax(∇²L) · Q_r & ΣQ extreme eigenvalues','curvature (÷N scale)',false);
-    L.showlegend=true;L.legend={orientation:'h',x:0,xanchor:'left',y:1.14,yanchor:'bottom',font:{size:9},bgcolor:'rgba(255,255,255,0.72)'};
-    L.margin={l:56,r:56,t:38,b:38};withZero(L);
-    L.yaxis2={overlaying:'y',side:'right',title:{text:'loss',font:{size:10}},showgrid:false,zeroline:false,type:'linear'};
-    const mk=(name,color,ax,dash)=>({x:[],y:[],mode:'lines',name:name,line:{width:1.9,color:color,dash:dash||'solid'},yaxis:ax||'y'});
-    newP('p_gw3_evo',[mk('train loss','#111827','y2'),mk('test loss','#9ca3af','y2','dot'),mk('sharpness λmax(∇²L)','#dc2626'),
-                      mk('Q_r top λ','#0f9d8f'),mk('Q_r bottom λ','#5eead4','y','dot'),
-                      mk('ΣQ top λ','#7c3aed'),mk('ΣQ bottom λ','#c4b5fd','y','dot')],L);}
-   {const L2=baseLayout('evolution: train + test accuracy','balanced accuracy',false);
-    L2.showlegend=true;L2.legend={orientation:'h',x:0,xanchor:'left',y:1.14,yanchor:'bottom',font:{size:9},bgcolor:'rgba(255,255,255,0.72)'};
-    L2.margin={l:52,r:12,t:38,b:38};L2.yaxis.range=[0,1.02];
-    newP('p_gw3_evo_acc',[{x:[],y:[],mode:'lines',name:'train acc',line:{width:1.9,color:'#2563eb'}},
-                          {x:[],y:[],mode:'lines',name:'test acc',line:{width:1.9,color:'#2563eb',dash:'dot'}}],L2);}}
+   gw3p0BuildPlots();}   // Panel 0 — 5 quadratic-surrogate trainings, 5 overlaid plots (built into #gw3p0_blocks)
   // ★grok-④ — curvature-subspace persistence: 4 panels (one per T₀), each 4 lines (top-in/out, bot-in/out)
   {const gw4L=(t)=>{const L=baseLayout(t,'count',false);L.showlegend=true;L.legend={font:{size:8},orientation:'h',x:0,y:1.14};L.margin={l:44,r:8,t:32,b:34};return L;};
    const gw4tr=()=>[['top-in','#b45309'],['top-out','#f59e0b'],['bot-in','#1d4ed8'],['bot-out','#60a5fa']].map(m=>({x:[],y:[],mode:'lines',name:m[0],line:{color:m[1],width:2}}));
@@ -4556,9 +4568,6 @@ function pushPoint(t,D,n,kth,nResid){
         extP('p_gw2_k'+(k+1)+'_cnt',{x:[[t],[t],[t]],y:[[cc[0]],[cc[1]],[cc[2]]]},[0,1,2]);}}}
   if(D.g_gw3){const g=D.g_gw3;   // ★grok-③ — store the per-tick §6 snapshot (NTK+GN+per-mode M_r + optional spectrum); scrub via slider
     GW3_SNAP.push({t:t,ntk:g.ntk,gn:g.gn,mr:g.mr,spec:g.spec||null});
-    if(g.evo){const e=g.evo;   // Panel 0 — LEFT: train+test loss (right axis) + sharpness + Q_r/ΣQ extreme eigenvalues (left axis); RIGHT: train+test accuracy
-      extP('p_gw3_evo',{x:[[t],[t],[t],[t],[t],[t],[t]],y:[[e.loss],[e.lte],[e.sharp],[e.mrTop],[e.mrBot],[e.hTop],[e.hBot]]},[0,1,2,3,4,5,6]);
-      if(e.atr!=null||e.ate!=null)extP('p_gw3_evo_acc',{x:[[t],[t]],y:[[e.atr],[e.ate]]},[0,1]);}
     const sl=document.getElementById('gw3_slider');const atEnd=!sl||+sl.value>=GW3_SNAP.length-2;
     if(sl){sl.max=GW3_SNAP.length-1;if(atEnd)sl.value=GW3_SNAP.length-1;}
     gw3RenderSpec(sl?+sl.value:GW3_SNAP.length-1);}
@@ -4574,6 +4583,7 @@ function pushPoint(t,D,n,kth,nResid){
   for(const[key,pfx]of[['g_gw5','gw5'],['g_gw6','gw6'],['g_gw7','gw7'],['g_gw8','gw8'],['g_gw9','gw9']]){
     if(D[key]){const dd=D[key];const isCE=dd.runs&&dd.runs.some(r=>r.ate&&r.ate.some(v=>v!=null));try{grokRenderExp(pfx,dd,isCE);}catch(e){}}}
   if(D.g_gw10)renderGw10(D.g_gw10);   // ★grok-⑩ (also driven live via type:'gwstream' — see gpuHandle)
+  if(D.g_gw3p0)renderGw3p0(D.g_gw3p0);   // ★grok-③ Panel-0 (also live via type:'gwstream')
   if(OPT.s35&&D.g27){applyG27(D.g27.pts);}   // §27 — accumulate this step's finalized iteration-point(s) into the 12 3D curves
   if(OPT.s35&&D.g27x){const gx=D.g27x,tt=gx.t,c=gx.cos||[],nm=gx.norm||[],cP=gx.cosP||[],nmP=gx.normP||[];   // §7 Panel 3 — per-step cosines + norms (time-series, scrubs with the master bar)
     if(c.length>=4)extP('p_s27x_cos',{x:[[tt],[tt],[tt],[tt]],y:[[c[0]],[c[1]],[c[2]],[c[3]]]},[0,1,2,3]);
@@ -6020,6 +6030,7 @@ function gpuHandle(m,st,sp,finish,resuming){
     }else if(m.type==='g15corr'){ADV_GOT.en23=1;S15_TERMS_GOT=true;s15corrPush(m);
     }else if(m.type==='gwstream'){   // ★grok-⑤–⑩ LIVE partial payloads (curves grow during the sub-runs, not dumped at the end)
       try{ if(m.which==='gw10'){ renderGw10(m.payload); }
+           else if(m.which==='gw3p0'){ renderGw3p0(m.payload); }
            else { const isCE=m.payload&&m.payload.runs&&m.payload.runs.some(r=>r.ate&&r.ate.some(v=>v!=null)); grokRenderExp(m.which,m.payload,isCE); } }catch(e){}
     }else if(m.type==='g16'){ADV_GOT.en24=1;s16Push(m);
     }else if(m.type==='g17'){ADV_GOT.en25=1;s17Push(m);
