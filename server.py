@@ -3768,7 +3768,11 @@ class TunedSplineMlpModel(AutogradModel):
         _maxi = self.objective in ("max", "diffmax")                  # ascent vs descent
         _better = (lambda a, b: a > b) if _maxi else (lambda a, b: a < b)
         def _score(mrg_s, jjg):                                       # the tracked scalar (mrg_s is SIGNED gᵀM_r g)
-            return (abs(mrg_s) / (jjg + 1e-30)) if _ratio else (mrg_s - jjg)
+            # ratio = |gᵀM_rg|/gᵀJJᵀg (scale-free). diff = the SIGNED difference but NORMALIZED per-term by the tanh
+            # baseline (mrg_s/mrg0 − jjg/jjg0): the RAW gᵀM_rg−gᵀJJᵀg is dominated by ‖Jg‖² (~1e7× gᵀM_rg), so the raw
+            # objective just drove ‖Jg‖²→0 (diffmax, untrainable) or →1e8 (diffmin, collapse) and the normalized κ-penalty
+            # was negligible against it. Per-baseline normalization puts the diff on the penalty's scale so norms stay bounded.
+            return (abs(mrg_s) / (jjg + 1e-30)) if _ratio else (mrg_s / mrg0 - jjg / jjg0)
 
         def norms_ng(psi):                                                           # no-grad metrics (for the grid + norm bounds)
             self.psi = psi.detach()
@@ -3812,12 +3816,14 @@ class TunedSplineMlpModel(AutogradModel):
             for _ in range(int(gsteps)):
                 opt.zero_grad()
                 gMrg, gJJg = ratio_norms(psi)
-                obj = (gMrg.abs() / (gJJg + 1e-20)) if _ratio else (gMrg - gJJg)                   # RATIO or SIGNED DIFF
+                obj = (gMrg.abs() / (gJJg + 1e-20)) if _ratio else (gMrg / mrg0 - gJJg / jjg0)      # RATIO or NORMALIZED SIGNED DIFF
                 pen = torch.relu(gMrg.abs() / mrg0 - self.kappa) ** 2 + torch.relu(gJJg / jjg0 - self.kappa) ** 2
+                if not _ratio:   # diff modes: also FLOOR the norms (≥ baseline/κ) so ‖Jg‖²/M_r can't collapse ⇒ net stays trainable
+                    pen = pen + torch.relu(1.0 / self.kappa - gJJg / jjg0) ** 2 + torch.relu(1.0 / self.kappa - gMrg.abs() / mrg0) ** 2
                 ((-obj if _maxi else obj) + 5.0 * pen).backward()             # ASCENT (max/diffmax) or DESCENT (min/diffmin)
                 if psi.grad is not None and torch.isfinite(psi.grad).all(): opt.step()
                 with torch.no_grad():
-                    rv = float((gMrg.abs() / (gJJg + 1e-20)) if _ratio else (gMrg - gJJg))
+                    rv = float((gMrg.abs() / (gJJg + 1e-20)) if _ratio else (gMrg / mrg0 - gJJg / jjg0))
                     if float(gMrg.abs()) <= self.kappa * mrg0 and float(gJJg) <= self.kappa * jjg0 and _better(rv, gb_r):
                         gb_psi, gb_r = psi.detach().clone(), rv
             best_psi, best_r = gb_psi, gb_r
