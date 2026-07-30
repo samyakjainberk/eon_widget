@@ -5639,15 +5639,18 @@ def run_stream(P):
                     Crd = torch.randn(p, _qrd, generator=_grd, dtype=Jm3.dtype, device=_dev())
                     _rdsc = (abs(mu_ev[0]) if mu_ev else 1.0) / max(4.0 * _qrd, 1.0)   # ≈ divide by the Wishart edge (2√q)²
                     op_rd = lambda v: _rdsc * (Brd @ (Brd.t() @ v) - Crd @ (Crd.t() @ v))
-                    mr["rd"], _ = _mrpanel(op_rd)
+                    mr["rd"], _rd_muv = _mrpanel(op_rd)                                     # keep muv ⇒ the ACTUAL random-dense edge
                     # "random-low-rank": GENUINELY low rank — only a FEW large ± eigenvalues, decaying FAST to ~0, with
                     #   the remaining p−2k modes EXACTLY zero. The skewed scree: the top-few are large POSITIVE and the
-                    #   bottom-few are large NEGATIVE, BOTH set ABOVE the random-dense edge (amp = gw3lrscale × |M_r top|),
+                    #   bottom-few are large NEGATIVE, BOTH set ABOVE the 'random' edge so low-rank DOMINATES the head/tail,
                     #   with magnitude decaying as gw3mrdecay^i so it collapses toward 0 quickly in between (vs the OLD
-                    #   ≥60-mode, slow-0.85-decay, amp≈edge version whose scree sat flat and BELOW 'random').
+                    #   ≥60-mode, slow-0.85-decay version whose scree sat flat and BELOW 'random').
                     _kside = max(2, min(int(P.get("gw3lrk", 8)), max(1, p // 2)))          # few dominant modes PER SIGN
                     _mrdec = min(0.95, max(0.05, float(P.get("gw3mrdecay", 0.5))))          # FAST magnitude decay ⇒ →0 quickly
-                    _amp = float(P.get("gw3lrscale", 8.0)) * (abs(mu_ev[0]) if mu_ev else 1.0)   # head/tail well ABOVE 'random'
+                    # amp is a MULTIPLE of the ACTUAL 'random' spectral radius (NOT |M_r top|): the random-dense op's real
+                    #   edge is ≈16× |M_r top| — scaling off |M_r top| left low-rank BELOW random. So dominate the edge directly.
+                    _rd_top = max([abs(x) for x in (_rd_muv or [])] + [abs(mu_ev[0]) if mu_ev else 1.0])
+                    _amp = float(P.get("gw3lrscale", 2.5)) * _rd_top                        # head/tail = 2.5× the random edge ⇒ ABOVE it
                     _lrnnz = 2 * _kside; _gen = torch.Generator(device=_dev()); _gen.manual_seed((t * 2654435761) & 0x7FFFFFFF)
                     Ulr, _ = torch.linalg.qr(torch.randn(p, _lrnnz, generator=_gen, dtype=Jm3.dtype, device=_dev()))
                     _geo = _amp * torch.tensor([_mrdec ** i for i in range(_kside)], dtype=Jm3.dtype, device=_dev())
@@ -5665,7 +5668,18 @@ def run_stream(P):
                             spec["ev"] = slq_density(_mode_op(None), p, 4, 24, 100, 0xC0FFEE, block=slqBlock)                                   # BLOCK SLQ (slqBlock, default 4)
                             spec["fx"] = slq_density(_mode_op({"mode": "fix", "theta_t": gw3_th0, "Qrand": None}), p, 4, 24, 100, 0xC0FFEE, block=slqBlock)
                             spec["rd"] = slq_density(op_rd, p, 4, 24, 100, 0xC0FFEE, block=slqBlock)   # random signed symmetric (Wigner-like)
-                            spec["lr"] = slq_density(op_lr, p, 4, 24, 100, 0xC0FFEE, block=slqBlock)   # low stable rank, high true rank (decaying)
+                            # "lr" scree is EXACT, not SLQ: the low-rank spectrum is analytically known (2·kside nonzeros
+                            #   ⊕ p−2k zeros), and (a) SLQ can't represent the zero bulk (Lanczos annihilates the nullspace
+                            #   after one apply ⇒ under-weights the zeros ⇒ its density smears the few nonzeros across all
+                            #   ranks) and (b) the client's signed-log lt=λmax·1e-6 turns ANY non-exact zero into y≈±4. So we
+                            #   send the exact sorted eigenvalues (middle = EXACT 0 ⇒ renders at y=0) as a pre-computed scree.
+                            _evd = torch.cat([_geo, torch.zeros(max(0, p - _lrnnz), dtype=Jm3.dtype, device=_dev()), -_geo.flip(0)])
+                            _rk = list(range(0, _kside + 2))                 # head: the large + eigenvalues (few ranks)
+                            _rr = float(_kside + 2)
+                            while _rr < p - _kside - 2: _rk.append(int(_rr)); _rr = _rr * 1.4 + 1.0   # log-spaced middle (all EXACT 0)
+                            _rk += list(range(max(0, p - _kside - 2), p))    # tail: the large − eigenvalues (few ranks)
+                            _rk = sorted(set(r for r in _rk if 0 <= r < p))
+                            spec["lr"] = {"scree": {"x": [float(r) for r in _rk], "y": [float(_evd[r]) for r in _rk]}}   # EXACT low-rank scree
                             g_gw3["spec"] = spec
                         except Exception:
                             pass
@@ -7868,7 +7882,7 @@ def _parse_params(q):
         "gw2tau": float(g("gw2tau", "0.5")),  # ★grok-② τ threshold for the switch counter
         "gw3": g("gw3", "0") == "1",     # ★grok-③ §6 phases under {evolving, init-fixed, random, random-low-rank} Q + per-mode SLQ M_r spectrum
         "gw3rank": int(g("gw3rank", "4")), "gw3k": int(g("gw3k", "20")),    # ★grok-③ rank r of random-low-rank Q + §6 top/bot-K
-        "gw3lrk": int(g("gw3lrk", "8")), "gw3mrdecay": float(g("gw3mrdecay", "0.5")), "gw3lrscale": float(g("gw3lrscale", "8.0")),   # ★grok-③ random-low-rank M_r scree: #dominant modes PER sign, magnitude decay^i, head/tail amplitude = scale×|M_r top| (skewed: few large ±, ≈0 between)
+        "gw3lrk": int(g("gw3lrk", "8")), "gw3mrdecay": float(g("gw3mrdecay", "0.5")), "gw3lrscale": float(g("gw3lrscale", "2.5")),   # ★grok-③ random-low-rank M_r scree: #dominant modes PER sign, magnitude decay^i, head/tail amplitude = scale×(ACTUAL random-dense edge) (skewed: few large ± ABOVE 'random', ≈0 between)
         "gw3full": g("gw3full", "0") == "1",  # ★grok-③ low-rank build: matched-spectrum (0) vs fully-random (1)
         "gw3p0rank": int(g("gw3p0rank", "8")), "gw3p0reexp": int(g("gw3p0reexp", "25")),   # ★Panel-0: low-rank Q rank + evolving-Q re-expand cadence
         "gw3p0lrdecay": float(g("gw3p0lrdecay", "0.5")),   # ★Panel-0 random-low-rank Q spectral decay: mode i ∝ decay^i ⇒ skewed spectrum (few large ± eigs, rest →0). Smaller = more skewed.

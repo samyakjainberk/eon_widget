@@ -3845,7 +3845,7 @@ function gw3RenderSpec(i){       // redraw the §6 bar panels for snapshot i (NT
   // SLQ spectrum: |λ| on log-x, log-y — carry forward the last snapshot that HAS a spectrum
   let sp=S.spec; if(!sp){for(let j=i;j>=0;j--){if(GW3_SNAP[j].spec){sp=GW3_SNAP[j].spec;break;}}}
   {const g=document.getElementById('p_gw3_spec');if(g&&g._fullLayout){const lg=(document.getElementById('gw3speclog')||{}).checked!==false;const tr=[];const _pdim=(META&&META.p)||0;
-   const _sc={}; if(sp)for(const m of modes){if(sp[m])_sc[m]=slqScree(sp[m],_pdim);}
+   const _sc={}; if(sp)for(const m of modes){if(sp[m])_sc[m]=(sp[m].scree?sp[m].scree:slqScree(sp[m],_pdim));}   // .scree = EXACT pre-computed scree (low-rank mode); else SLQ-density→scree
    const _lt=lg?_symlt([].concat(...Object.values(_sc).map(s=>s.y))):1;   // SHARED symlog threshold across the overlaid modes ⇒ comparable
    for(const m of modes){const s=_sc[m]; if(!s)continue; let xs=s.x,ys=s.y; if(lg){xs=s.x.map(v=>v+1);ys=s.y.map(v=>_slog(v,_lt));} tr.push({x:xs,y:ys,mode:'lines',name:GW3_MNAME[m],line:{color:GW3_MC[m],width:2}});}
    const L=Object.assign({},g.layout);L.xaxis=Object.assign({},L.xaxis,{type:lg?'log':'linear'});L.xaxis.title={text:lg?'rank+1 (eigenvalues, high→low)':'rank (eigenvalues, high→low)'};L.yaxis=Object.assign({},L.yaxis,{type:'linear'});L.yaxis.title={text:lg?'sign(λ)·log₁₀(1+|λ|/λref) (M_r)':'eigenvalue λ (M_r)'};try{Plotly.react('p_gw3_spec',tr.length?tr:[{x:[],y:[]}],L);}catch(e){}}}
