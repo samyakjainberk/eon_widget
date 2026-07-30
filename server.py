@@ -5693,14 +5693,27 @@ def run_stream(P):
                     _mrdec = min(0.95, max(0.05, float(P.get("gw3mrdecay", 0.5))))          # FAST magnitude decay ⇒ →0 quickly
                     # amp is a MULTIPLE of the ACTUAL 'random' spectral radius (NOT |M_r top|): the random-dense op's real
                     #   edge is ≈16× |M_r top| — scaling off |M_r top| left low-rank BELOW random. So dominate the edge directly.
-                    _rd_top = max([abs(x) for x in (_rd_muv or [])] + [abs(mu_ev[0]) if mu_ev else 1.0])
+                    _ref_lr = abs(mu_ev[0]) if mu_ev else 1.0
+                    # keep only FINITE, reasonable Ritz values: op_rd is rank-deficient too, so its Lanczos can occasionally
+                    #   throw a blown-up (~1e300) spurious eigenvalue — drop those so _amp (⇒ the low-rank spectrum) stays sane.
+                    _rd_top = max([abs(x) for x in (_rd_muv or []) if x is not None and abs(x) == abs(x) and abs(x) < 1e6 * _ref_lr] + [_ref_lr])
                     _amp = float(P.get("gw3lrscale", 2.5)) * _rd_top                        # head/tail = 2.5× the random edge ⇒ ABOVE it
                     _lrnnz = 2 * _kside; _gen = torch.Generator(device=_dev()); _gen.manual_seed((t * 2654435761) & 0x7FFFFFFF)
                     Ulr, _ = torch.linalg.qr(torch.randn(p, _lrnnz, generator=_gen, dtype=Jm3.dtype, device=_dev()))
                     _geo = _amp * torch.tensor([_mrdec ** i for i in range(_kside)], dtype=Jm3.dtype, device=_dev())
                     lam_lr = torch.cat([_geo, -_geo])                                      # +head (decaying) ⊕ −tail (decaying); rest of p ZERO
                     op_lr = lambda v: Ulr @ (lam_lr * (Ulr.t() @ v))
-                    mr["lr"], _ = _mrpanel(op_lr)
+                    # mr["lr"] EXACTLY from the known eigenpairs (Ulr orthonormal cols ↔ lam_lr; rest of p is EXACTLY 0).
+                    #   Do NOT Lanczos op_lr: a random q0 is ~orthogonal to its tiny 2k-dim range ⇒ wscale≈0 defeats the
+                    #   breakdown guard ⇒ roundoff amplifies to ~1e308 ⇒ garbage eigvecs ⇒ cos=0 ⇒ INVISIBLE bars everywhere
+                    #   except the analytic scree. Same {lam,p1..p4} contract as _mrpanel, top-K ⊕ bottom-K by eigenvalue.
+                    _lord = torch.argsort(lam_lr, descending=True); _nlr = int(lam_lr.numel())
+                    _ktl = min(Klan, _nlr); _bsl = max(_ktl, _nlr - Klan); _posL = list(range(_ktl)) + list(range(_bsl, _nlr))
+                    _Llam = []; _Lp1 = []; _Lp2 = []; _Lp3 = []; _Lp4 = []
+                    for pos in _posL:
+                        ix = int(_lord[pos]); li = float(lam_lr[ix]) * scN; ap = abs(float(Ulr[:, ix] @ Jr3))
+                        _Llam.append(li); _Lp1.append(ap / Jrn3); _Lp2.append(ap); _Lp3.append(li * ap / Jrn3); _Lp4.append(li * ap)
+                    mr["lr"] = {"lam": _Llam, "p1": _Lp1, "p2": _Lp2, "p3": _Lp3, "p4": _Lp4}
                     g_gw3 = {"t": t, "rank": _lrnnz, "K": Klan,
                              "ntk": ntk,                                          # {ev,fx,rd,lr} — 4 J-variants (evolving/init-fixed/random/random-low-rank)
                              "gn": {"cg": cg, "gp1": gp1, "gp2": gp2, "gp3": gp3, "gp4": gp4, "ng": ng},
