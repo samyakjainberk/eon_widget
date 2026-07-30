@@ -3252,8 +3252,15 @@ def _block_lanczos_core(hvp, p, b, m, seed, dt=None):
         #   absolute guard (‖Bj‖<1e-10) never fired, so QR renormalized that roundoff back to a UNIT block and the
         #   three-term recurrence re-amplified it every step ⇒ spurious eigenvalues ±1e5+ (exact max ~70) that survived
         #   the nonneg clamp (only the negatives are clamped). Break when the residual is negligible vs the op scale.
-        if float(W.abs().max()) < 1e-7 * wscale + 1e-30:
-            break                                                    # do NOT QR-renormalize roundoff into a phantom Krylov direction
+        if float(W.abs().max()) < 1e-7 * wscale + 1e-30:             # ★ breakdown ⇒ FREEZE (do NOT break, mirrors _lanczos_core's
+            #   freeze): breaking returns k < m blocks, so a consumer that indexes a FIXED number of block-Ritz values
+            #   reads out of bounds ⇒ CUDA device-side assert. Append a ZERO off-diagonal block and a ZERO probe block
+            #   and keep iterating to m so k==m ALWAYS; the frozen blocks contribute 0 eigenvalues (spurious, tiny
+            #   first-block quadrature weight ⇒ excluded downstream) and add NO renormalized roundoff (blow-up stays killed).
+            Bj = torch.zeros(b, b, dtype=dt, device=_dev())
+            B.append(Bj)
+            Qprev = Qj; Bprev = Bj; Qj = torch.zeros(p, b, dtype=dt, device=_dev())
+            continue
         Qnext, Bj = torch.linalg.qr(W)                              # (p×b), (b×b) upper-triangular
         B.append(Bj)
         Qprev = Qj; Bprev = Bj; Qj = Qnext
@@ -3814,7 +3821,7 @@ class TunedSplineMlpModel(AutogradModel):
             a = _spline_act(z, self.psi, self.srange) if l < self.nlayers - 1 else z
         return a
 
-    def tune(self, th, X, Y, N, outD, gsteps=80, glr=0.01):
+    def tune(self, th, X, Y, N, outD, gsteps=250, glr=0.02):
         """FINE-TUNE the spline control points ψ ON THE FLY each run — NOT a hardcoded/predefined activation. Two stages:
         (1) a cheap grid WARM-START, then (2) GRADIENT descent/ascent on the objective — Adam directly on the nc control
         points ψ via explicit double-backward — with a soft penalty keeping both curvature norms |gᵀM_r g|, gᵀJJᵀg ≤ κ×
@@ -3827,6 +3834,10 @@ class TunedSplineMlpModel(AutogradModel):
           "diffmin" (bsplinetuned4): minimize the SIGNED DIFF          (push gᵀM_r g NEGATIVE and/or ‖Jg‖² UP)
         The κ cap bounds |gᵀM_r g|≤κ·|·|₀ and gᵀJJᵀg≤κ·(·)₀, so every objective (ratio or signed diff) stays finite."""
         M = N * outD; kn = self._knots; th = th.detach()
+        # LOOSER cap for TUNING (the display self.kappa was clipping all four objectives to near-identical magnitudes ⇒
+        # the trends bunched up). Raising it lets max/diffmax drive |gᵀM_rg| genuinely HIGH and min/diffmin drive it LOW,
+        # so the four land at DISTINCT, well-separated extremes with a large untuned→tuned gap. Floor stays at 1/_kap.
+        _kap = max(float(self.kappa), 6.0)
         _ratio = self.objective in ("max", "min")                     # ratio objective vs signed-difference objective
         _maxi = self.objective in ("max", "diffmax")                  # ascent vs descent
         _better = (lambda a, b: a > b) if _maxi else (lambda a, b: a < b)
@@ -3846,6 +3857,12 @@ class TunedSplineMlpModel(AutogradModel):
             return float(g @ hvpS(th, X, g, rc)), float((Jg ** 2).sum())             # SIGNED gᵀM_r g, gᵀJJᵀg
         mrg0_s, jjg0 = norms_ng(torch.tanh(kn)); mrg0 = abs(mrg0_s) + 1e-30          # |·|₀ = penalty magnitude scale
         base_score = _score(mrg0_s, jjg0)
+        def _ok(mrg_s, jjg):   # reject DEGENERATE solutions (the objective gradient overpowers the soft floor, so gate at
+            #   ACCEPTANCE): the net must stay ALIVE — ‖Jg‖² within [jjg0/_kap, _kap·jjg0] — so max/min can't cheat the
+            #   ratio by collapsing gᵀJJᵀg→0 (frozen net). |gᵀM_rg| bounded by _kap·mrg0; and the DIFF modes must keep a
+            #   REAL |gᵀM_rg|≥mrg0/_kap so diffmax can't collapse its curvature. ⇒ every variant is trainable AND distinct.
+            return (jjg0 / _kap <= jjg <= _kap * jjg0) and (abs(mrg_s) <= _kap * mrg0) \
+                   and (_ratio or abs(mrg_s) >= mrg0 / _kap)
 
         cup = [kn * torch.sin(b * kn) for b in (1., 2., 3., 4.)] + [kn * torch.tanh(b * kn) for b in (.5, 1., 2., 3.)] \
               + [torch.sqrt(kn * kn + c) - c ** .5 for c in (.05, .2, .5, 1.)]        # high consistent φ″ ⇒ big +gᵀM_r g
@@ -3857,7 +3874,7 @@ class TunedSplineMlpModel(AutogradModel):
         best_psi, best_r = torch.tanh(kn), base_score
         for psi in cands:
             mrg_s, jjg = norms_ng(psi)
-            if abs(mrg_s) <= self.kappa * mrg0 and jjg <= self.kappa * jjg0 and _better(_score(mrg_s, jjg), best_r):
+            if _ok(mrg_s, jjg) and _better(_score(mrg_s, jjg), best_r):
                 best_psi, best_r = psi, _score(mrg_s, jjg)
 
         try:                                                                         # gradient refinement (differentiable objective)
@@ -3876,18 +3893,22 @@ class TunedSplineMlpModel(AutogradModel):
             psi = best_psi.detach().clone().requires_grad_(True)
             opt = torch.optim.Adam([psi], lr=glr)
             gb_psi, gb_r = best_psi.detach().clone(), best_r
-            for _ in range(int(gsteps)):
+            for _gi in range(int(gsteps)):
+                for _pg in opt.param_groups:                                  # LINEAR LR DECAY glr → 0.1·glr: big early moves
+                    _pg["lr"] = glr * (0.1 + 0.9 * (1.0 - _gi / max(1, int(gsteps))))   #   to reach the extreme, fine late to settle
                 opt.zero_grad()
                 gMrg, gJJg = ratio_norms(psi)
                 obj = (gMrg.abs() / (gJJg + 1e-20)) if _ratio else (gMrg / mrg0 - gJJg / jjg0)      # RATIO or NORMALIZED SIGNED DIFF
-                pen = torch.relu(gMrg.abs() / mrg0 - self.kappa) ** 2 + torch.relu(gJJg / jjg0 - self.kappa) ** 2
-                if not _ratio:   # diff modes: also FLOOR the norms (≥ baseline/κ) so ‖Jg‖²/M_r can't collapse ⇒ net stays trainable
-                    pen = pen + torch.relu(1.0 / self.kappa - gJJg / jjg0) ** 2 + torch.relu(1.0 / self.kappa - gMrg.abs() / mrg0) ** 2
+                pen = torch.relu(gMrg.abs() / mrg0 - _kap) ** 2 + torch.relu(gJJg / jjg0 - _kap) ** 2
+                if not _ratio:   # diff modes: also FLOOR the norms (≥ baseline/_kap) so ‖Jg‖²/M_r can't collapse ⇒ net stays trainable
+                    pen = pen + torch.relu(1.0 / _kap - gJJg / jjg0) ** 2 + torch.relu(1.0 / _kap - gMrg.abs() / mrg0) ** 2
+                elif self.objective == "max":   # max-RATIO: floor ‖Jg‖² too — else it cheats the ratio by collapsing gᵀJJᵀg→0
+                    pen = pen + torch.relu(1.0 / _kap - gJJg / jjg0) ** 2   #   (untrainable frozen net); force the ratio UP via gᵀM_rg
                 ((-obj if _maxi else obj) + 5.0 * pen).backward()             # ASCENT (max/diffmax) or DESCENT (min/diffmin)
                 if psi.grad is not None and torch.isfinite(psi.grad).all(): opt.step()
                 with torch.no_grad():
                     rv = float((gMrg.abs() / (gJJg + 1e-20)) if _ratio else (gMrg / mrg0 - gJJg / jjg0))
-                    if float(gMrg.abs()) <= self.kappa * mrg0 and float(gJJg) <= self.kappa * jjg0 and _better(rv, gb_r):
+                    if _ok(float(gMrg), float(gJJg)) and _better(rv, gb_r):
                         gb_psi, gb_r = psi.detach().clone(), rv
             best_psi, best_r = gb_psi, gb_r
         except Exception:
