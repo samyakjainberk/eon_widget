@@ -773,21 +773,39 @@ def _sec16_chebyshev2_testset(N, degree, dt):
     return xm.unsqueeze(1), y.unsqueeze(1)
 
 
-def _ksparse_testset(N, nbits, k, seed, dt):
-    """Held-out k-sparse parity test set: the SAME fixed subset S as training, fresh ±1 bits from a
-    DISJOINT mulberry32 stream (seed*7919+99991). MIRRORS eos_lab.make_test_set / index.html sec16Holdout."""
+def _ksparse_train_keys(Ntr, nbits, seed):
+    """The EXACT set of ±1 bit-vectors (as tuples) that `load_ksparse(Ntr, nbits, k, seed)` produces for TRAINING —
+    same mulberry32(seed*7919+1) stream, row-major. Used to exclude them from the held-out test set."""
+    nb = max(1, int(nbits)); rng = mulberry32(u32(int(seed) * 7919 + 1)); keys = set()
+    for _ in range(int(Ntr)):
+        keys.add(tuple(1.0 if rng() < 0.5 else -1.0 for _ in range(nb)))
+    return keys
+
+
+def _ksparse_testset(N, nbits, k, seed, dt, exclude=None):
+    """Held-out k-sparse parity test set: the SAME fixed subset S as training (so the parity FUNCTION is unchanged),
+    fresh ±1 bits from a DISJOINT mulberry32 stream (seed*7919+99991). When `exclude` (a set of train bit-tuples) is
+    given, REJECTION-SAMPLE so every test row is a bit-vector NOT present in training AND unique within the test set
+    (a genuine held-out split, not just a disjoint stream — the 2^nbits space is finite so independent draws overlap).
+    If the space is too small to fill N disjoint rows, returns as many as possible. MIRRORS eos_lab.make_test_set."""
     nb = max(1, int(nbits)); kk = max(1, min(int(k), nb))
     perm = _shuffle16(nb, (int(seed) ^ 0x4B5A11) & 0x7FFFFFFF); S = set(perm[:kk])
     rng = mulberry32(u32(int(seed) * 7919 + 99991))
-    X = torch.empty(int(N), nb, dtype=dt, device=_dev()); Y = torch.empty(int(N), 1, dtype=dt, device=_dev())
-    for i in range(int(N)):
-        prod = 1.0
-        for j in range(nb):
-            b = 1.0 if rng() < 0.5 else -1.0
-            X[i, j] = b
-            if j in S:
-                prod *= b
-        Y[i, 0] = prod
+    excl = exclude if exclude is not None else set()
+    rows = []; ys = []; seen = set(); guard = 0; maxtries = 300 * int(N) + 20000
+    while len(rows) < int(N) and guard < maxtries:
+        guard += 1
+        bits = tuple(1.0 if rng() < 0.5 else -1.0 for _ in range(nb))   # draw a full row (keeps the stream row-major)
+        if bits in excl or bits in seen:
+            continue
+        seen.add(bits); prod = 1.0
+        for j in S:
+            prod *= bits[j]
+        rows.append(bits); ys.append(prod)
+    if not rows:                                                        # degenerate (nb tiny, everything excluded)
+        return (torch.empty(0, nb, dtype=dt, device=_dev()), torch.empty(0, 1, dtype=dt, device=_dev()))
+    X = torch.tensor(rows, dtype=dt, device=_dev())
+    Y = torch.tensor(ys, dtype=dt, device=_dev()).reshape(-1, 1)
     return X, Y
 
 
@@ -851,6 +869,36 @@ def _sec16_holdout(dataset, N, P, inD, outD):
         Yl = [[tgt * gauss(trng) for _ in range(int(outD))] for _ in range(int(N))]
     return (torch.tensor(Xl, dtype=torch.float64, device=dev),
             torch.tensor(Yl, dtype=torch.float64, device=dev))
+
+
+def _heldout_testset(dataset, Ntr, Nte, inD, outD, P):
+    """UNIFIED held-out TEST set, GUARANTEED disjoint from the training set (built with P's seed, size Ntr) and drawn
+    from the SAME data-generating process. One place so §1 and the grok interventions stay consistent. Returns
+    (Xte, Yte) in DTYPE, or (None, None) if undefined for the dataset.
+      chebyshev/chebyshev2 : the Ntr−1 MIDPOINTS of the train grid linspace(-1,1,Ntr) — never a grid point (incl.
+                             endpoints) ⇒ provably disjoint, SAME T_degree labels (a genuine off-grid interpolation test).
+      ksparse              : rejection-sample bit-vectors NOT in the train set (finite 2^nbits space ⇒ independent
+                             draws overlap); SAME parity subset S ⇒ same labelling function.
+      cifar10/mnist(+2cls) : the REAL held-out TEST split (disjoint from the train pool by construction).
+      continuous synthetic : disjoint mulberry32 stream (seed+987654) ⇒ inputs disjoint w.p. 1, same target function.
+      modadd               : disjoint seed only — the m² one-hot space is small, so at N>m² test necessarily reuses
+                             (a,b) pairs (a proper pair-holdout would need a fixed split, not independent sampling)."""
+    seed = int(P["seed"])
+    try:
+        if dataset in ("chebyshev", "chebyshev2"):
+            fn = _sec16_chebyshev2_testset if dataset == "chebyshev2" else _sec16_chebyshev_testset
+            return fn(int(Ntr), int(P.get("degree", 3)), DTYPE)
+        if dataset == "ksparse":
+            excl = _ksparse_train_keys(int(Ntr), int(inD), seed)
+            return _ksparse_testset(int(Nte), int(inD), int(P.get("ksparse", 3)), seed, DTYPE, exclude=excl)
+        if dataset in ("cifar10", "cifar2", "mnist", "mnist2"):
+            Xte, Yte = _sec16_holdout(dataset, int(Nte), P, int(inD), int(outD))    # REAL test split, float64
+            return (Xte.to(DTYPE), Yte.to(DTYPE)) if Xte is not None else (None, None)
+        Pte = dict(P); Pte["seed"] = (seed + 987654) & 0x7FFFFFFF
+        _, Xte, Yte, _, _ = init_data_theta(Pte, dataset, int(Nte), int(inD), int(outD))
+        return Xte, Yte
+    except Exception:
+        return None, None
 
 
 def _sec16_driver(th0, X, Y, lr, warmup, iters, neig, mlan, seed, tol, bgrid, ares, Xtest, Ytest, baselines, kdir=8):
@@ -5013,23 +5061,12 @@ def run_stream(P):
     # Held-out TEST set for the §1 loss plot (train vs test overlay ⇒ generalization / grokking visible on the core plot).
     # Same generator, disjoint seed (+987654, mirrors the grok interventions); test loss is one forward per §1 tick.
     # Skipped for owt (a language model has no comparable scalar held-out loss here — Y are token ids).
-    # chebyshev/chebyshev2 use a FIXED linspace(-1,1,N) grid that ignores the seed, so a same-N held-out set would be
-    # IDENTICAL to train (test loss ≡ train loss). Use a different-sized grid ⇒ a genuine OFF-GRID interpolation
-    # test set (measures generalization to unseen x). (anglepair = 2 fixed points has no possible held-out set ⇒ test≡train.)
+    # Unified _heldout_testset ⇒ GUARANTEED disjoint from train (chebyshev→train-grid midpoints, ksparse→rejection vs
+    # train configs, cifar/mnist→real test split, continuous→disjoint seed) with the SAME data-generating process.
     Xtest = Ytest = None; Ntest = 0
     if dataset != "owt":
-        try:
-            _Pte = dict(P); _Pte["seed"] = (int(P["seed"]) + 987654) & 0x7FFFFFFF
-            _Nte = (Nfull + max(3, Nfull // 3)) if dataset in ("chebyshev", "chebyshev2") else Nfull
-            if dataset == "ksparse":
-                # ★ ksparse: the parity SUBSET S is itself seeded (perm from seed^0x4B5A11), so offsetting the seed would
-                #   pick a DIFFERENT parity function ⇒ test labels unrelated to train ⇒ test-acc stuck at chance forever.
-                #   _ksparse_testset keeps the TRAIN seed's subset S and draws fresh bits from a disjoint stream.
-                Xtest, Ytest = _ksparse_testset(_Nte, inD, int(P.get("ksparse", 3)), int(P["seed"]), DTYPE); Ntest = int(Xtest.shape[0])
-            else:
-                _, Xtest, Ytest, _, _ = init_data_theta(_Pte, dataset, _Nte, inD, outD); Ntest = int(Xtest.shape[0])
-        except Exception:
-            Xtest = Ytest = None; Ntest = 0
+        Xtest, Ytest = _heldout_testset(dataset, Nfull, Nfull, inD, outD, P)
+        Ntest = int(Xtest.shape[0]) if Xtest is not None else 0
     _qcfg = _qcfg_setup(P, th, X, M)   # qinit toggle: evolve (default) | fix@θ_t | gauss/bern/unif random Q
     if _qcfg["mode"] != "evolve" or _qcfg["note"]:   # provenance: record the Q-init mode (non-default runs only)
         # Sections that reach Q via torch.func and do NOT yet honour qinit (§15/§22/§23/§25-cosines) — warn if enabled
@@ -5888,15 +5925,13 @@ def run_stream(P):
             Xtr_g = Ytr_g = Xte_g = Yte_g = None; Ntr_g = Nte_g = 0
             if (gw5 or gw6 or gw7 or gw8 or gw9 or gw10) and _grokable and (not (gw5_done and gw6_done and gw7_done and gw8_done and gw9_done and gw10_done)):
                 try:
-                    # grok-⑤–⑩ build their OWN larger TRAIN (gw_nsamp) + disjoint TEST (gw_nte) sets from the same
-                    # dataset generator — so test loss/acc always populate (every dataset) and N is large enough to
-                    # separate memorization from generalization. init_data_theta covers all datasets uniformly.
+                    # grok-⑤–⑩ build their OWN larger TRAIN (gw_nsamp) + held-out TEST set. _heldout_testset GUARANTEES
+                    # the test is disjoint from THIS train (gw_nsamp) with the same DGP (chebyshev→train-grid midpoints,
+                    # ksparse→rejection vs train configs, cifar→real test split, continuous→disjoint seed). Uniform across
+                    # datasets ⇒ test loss/acc always populate + no memorization leak.
                     _, Xtr_g, Ytr_g, _, _ = init_data_theta(P, dataset, gw_nsamp, inDimE, outDimE); Ntr_g = Xtr_g.shape[0]
-                    if dataset == "ksparse":   # ★ keep the TRAIN seed's parity subset (see _grok_heldout / §1 overlay)
-                        Xte_g, Yte_g = _ksparse_testset(gw_nte, inDimE, int(P.get("ksparse", 3)), int(P["seed"]), DTYPE); Nte_g = Xte_g.shape[0]
-                    else:
-                        Pte = dict(P); Pte["seed"] = (int(P["seed"]) + 987654) & 0x7FFFFFFF
-                        _, Xte_g, Yte_g, _, _ = init_data_theta(Pte, dataset, gw_nte, inDimE, outDimE); Nte_g = Xte_g.shape[0]
+                    Xte_g, Yte_g = _heldout_testset(dataset, gw_nsamp, gw_nte, inDimE, outDimE, P)
+                    Nte_g = int(Xte_g.shape[0]) if Xte_g is not None else 0
                 except Exception:
                     Xtr_g = Ytr_g = Xte_g = Yte_g = None; Ntr_g = Nte_g = 0
             if (gw5 or gw6 or gw7 or gw8 or gw9 or gw10) and Xtr_g is None:
