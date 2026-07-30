@@ -2334,6 +2334,63 @@ def _sec21_payload(Jc, rr, th, X, N, outD, K):
             "K": Klan, "ntk": nt, "gn": ng}
 
 
+def _sec_standardinit_payload(Jc, rr, th, X, N, outD, K, ref):
+    """§7 (prediction_standardinit): section-6's r↔NTK and J·r↔M_r bar panels, but on a ranking FROZEN AT t=0.
+    At t=0 (ref is None) we eigendecompose NTK=JJᵀ (top-K) and M_r=Σr_kQ_k (top-K⊕bottom-K), FREEZE their eigenvectors +
+    eigenvalues sorted descending (the fixed x-axis), and start per-position running-max buffers. At each later t we
+    RECOMPUTE the current eigenvectors and, for EACH current eigenvector, place its projection at the frozen t=0 position
+    it best matches (i*=argmax_i |cos(u_i⁰,u_j^t)|; on collision the highest-|cos| current dir keeps the slot — the rest
+    of that j is dropped; frozen positions with no match stay 0). Panels 1-2 = these t=0-mapped projections (4 bars:
+    |cos|, raw, ×λ, frozen λ); panels 3-4 = the per-position running MAX over t'≤t. Reuses _sec21_payload's projection
+    math; returns (payload, ref). Lets you watch a fixed init-direction and see cycles repeat under standard init."""
+    M = N * outD; Jg = Jc[:M]; r = rr[:M]; p = Jg.shape[1]; rc = r.reshape(N, outD)
+    scN = 1.0 / max(N, 1); rn = max(float(r.norm()), 1e-30)
+    # ---- CURRENT NTK eigenpairs (v_j, σ_j), M-dim (unit columns from a symmetric eig) ----
+    Kc, Vc = sym_eig_desc(Jg @ Jg.t()); nt = min(int(K), M); Vt = Vc[:, :nt]
+    sig_t = [float(Kc[i]) * scN for i in range(nt)]
+    # ---- CURRENT M_r eigenpairs (u_j, λ_j), p-dim via Lanczos (identical to §21) ----
+    Klan = max(1, min(int(K), p)); mlan = min(p, max(5 * Klan, 64))
+    Q, T, kk = _lanczos_core(lambda v: hvpS(th, X, v, rc), p, mlan, 0, dt=Jg.dtype, q0=_randvec16(p, SEC21_SEED))
+    mu, Sv = _safe_eigh(T); desc = torch.argsort(mu, descending=True); Qmat = torch.stack(Q)
+    kt = min(Klan, kk); bs = max(kt, kk - Klan); posn = list(range(kt)) + list(range(bs, kk))
+    Ut = torch.stack([Sv[:, int(desc[pp])].to(device=_dev(), dtype=Jg.dtype) @ Qmat for pp in posn])
+    Ut = Ut / Ut.norm(dim=1, keepdim=True).clamp_min(1e-30)          # (nu, p) unit rows
+    lam_t = [float(mu[int(desc[pp])]) * scN for pp in posn]
+    Jr = Jg.t() @ r; Jrn = max(float(Jr.norm()), 1e-30); nu = Ut.shape[0]
+    if ref is None:                                                  # t=0 ⇒ FREEZE the basis + start running-max buffers
+        ref = {"V0": Vt.detach().clone(), "sig0": list(sig_t), "nt": nt,
+               "U0": Ut.detach().clone(), "lam0": list(lam_t), "nu": nu,
+               "rmax_ntk": [[0.0] * nt for _ in range(4)], "rmax_mr": [[0.0] * nu for _ in range(4)]}
+    V0 = ref["V0"]; U0 = ref["U0"]; nt0 = ref["nt"]; nu0 = ref["nu"]
+    # ===== NTK panel: each current v_j → best frozen slot i*=argmax_i |cos(V0_i,v_j)| (highest-|cos| wins the slot) =====
+    n1 = [0.0] * nt0; n2 = [0.0] * nt0; n3 = [0.0] * nt0; n4 = [0.0] * nt0; won = [-1.0] * nt0
+    Cn = (V0.t() @ Vt).abs()                                         # (nt0, nt) |cos|
+    for j in range(nt):
+        i = int(torch.argmax(Cn[:, j])); c = float(Cn[i, j])
+        if c > won[i]:
+            ap = abs(float(Vt[:, j] @ r)); si = sig_t[j]
+            n1[i] = ap / rn; n2[i] = ap; n3[i] = si * ap / rn; n4[i] = si * ap; won[i] = c
+    # ===== M_r panel: each current u_j → best frozen slot =====
+    p1 = [0.0] * nu0; p2 = [0.0] * nu0; p3 = [0.0] * nu0; p4 = [0.0] * nu0; wonm = [-1.0] * nu0
+    Cm = (U0 @ Ut.t()).abs()                                         # (nu0, nu) |cos|
+    for j in range(nu):
+        i = int(torch.argmax(Cm[:, j])); c = float(Cm[i, j])
+        if c > wonm[i]:
+            ap = abs(float(Ut[j] @ Jr)); li = lam_t[j]
+            p1[i] = ap / Jrn; p2[i] = ap; p3[i] = li * ap / Jrn; p4[i] = li * ap; wonm[i] = c
+    # ===== per-position running MAX (panels 3-4) =====
+    cur_n = [n1, n2, n3, n4]; cur_p = [p1, p2, p3, p4]
+    for w in range(4):
+        rnw = ref["rmax_ntk"][w]; rmw = ref["rmax_mr"][w]
+        for i in range(nt0): rnw[i] = max(rnw[i], cur_n[w][i])
+        for i in range(nu0): rmw[i] = max(rmw[i], cur_p[w][i])
+    payload = {"sig0": ref["sig0"], "lam0": ref["lam0"], "K": Klan, "ntk": nt0, "nu": nu0,
+               "n1": n1, "n2": n2, "n3": n3, "n4": n4, "p1": p1, "p2": p2, "p3": p3, "p4": p4,
+               "rn1": list(ref["rmax_ntk"][0]), "rn2": list(ref["rmax_ntk"][1]), "rn3": list(ref["rmax_ntk"][2]), "rn4": list(ref["rmax_ntk"][3]),
+               "rp1": list(ref["rmax_mr"][0]), "rp2": list(ref["rmax_mr"][1]), "rp3": list(ref["rmax_mr"][2]), "rp4": list(ref["rmax_mr"][3])}
+    return payload, ref
+
+
 def _qrandom_hvp(p, R, seed, dt, dev):
     """§23's fixed RANDOM function Hessian: a low-rank symmetric operator Q[v]=Σ_{j=1}^R s_j (ĝ_jᵀv) ĝ_j
     (ĝ_j unit-norm Gaussian, s_j=±1), UNSCALED. Seeded ⇒ deterministic. Returns the hvp closure."""
@@ -4957,6 +5014,8 @@ def run_stream(P):
     sec20k = max(1, int(P.get("s28k", 40)))   # §20: # eigenpairs per side (top-K ⊕ bottom-K) of M_r
     s29 = P.get("s29", 0)                # §21: residual↔spectrum alignment (NTK panel + M_r panel); needs the M×p Jacobian + hvpS
     sec21k = max(1, int(P.get("s29k", 40)))   # §21: # NTK eigvecs (top) & M_r eigenpairs per side (top-K ⊕ bottom-K)
+    sinit = int(P.get("sinit", 0))       # §7 (prediction_standardinit): section-6 panels on a FROZEN t=0 ranking + running-max (NAME 'sinit' — 's7' is the existing §7)
+    sinitk = max(1, int(P.get("sinitk", 40)))  # §7: # NTK eigvecs (top) & M_r eigenpairs per side (top-K ⊕ bottom-K), same as §21
     s30 = P.get("s30", 0)                # §22: §20's M_r histograms on a frozen-Q QUADRATIC surrogate trajectory (freeze at iteration s30t)
     s31 = P.get("s31", 0)                # §23: §20's M_r histograms on a RANDOM-Hessian quadratic surrogate (low-rank R, frozen at θ₀)
     s32 = P.get("s32", 0)                # §24: A=JJᵀr & B=(η/2N)JrᵀQ_kJr alignment with residual + top-4 NTK eigvecs (time-series)
@@ -5139,6 +5198,7 @@ def run_stream(P):
     sec15_hist = []            # §15: rolling buffer of the last 2 eig-ticks' {th, J, r} (need t−1 and t−2)
     sec6_prev_Jrn = None; sec6_Jf2hist = []; sec6_prev_lam3 = None   # §6 phases-of-learning: prev ‖Jᵀr‖ (for Δ‖Jᵀr‖) + last-2 ‖J‖²_F (for ½ d²‖J‖²_F/dt²) + prev top-3 NTK eigvals (for Δλ_i)
     s6f_Umr = None; s6f_Ugn = None; s6f_lam0 = None; s6f_gn0 = None  # §6-FIXED-BASIS: frozen INIT eigvecs (K×p) of M_r & GN + their init eigenvalues (the frozen ranking); set once at the first tick
+    sinit_ref = None                     # §7 (prediction_standardinit): frozen t=0 NTK/M_r eigenbasis + per-position running-max; set on the first §7 tick
     sec25_hist = []            # §25: rolling buffer of the last 2 ticks' {th, J, r} for the II/III tr-NTK 2nd-diff terms (need t−1,t−2)
     sec25_rhist = []           # §25: rolling buffer of the last 101 ticks' {t, r} for cos(r_t, r_{t−k}), k∈{1,10,30,50,100} (residual-direction drift)
     sec25_r0hist = []          # §25: the INITIAL residual r_0 (persistent, 1 entry) for the cos(r_t, r_0) cumulative-rotation reference line
@@ -5426,7 +5486,7 @@ def run_stream(P):
 
             # ---- multi-sample sections: shared Jacobian columns Jc (M, p), residual rr (M,) ----
             Jc = rr = None
-            if ((multi_ok or s12single) and (s7 or s8 or s9 or s10 or s11 or s12 or s13 or s15 or s16 or s17 or s18 or s19 or s20 or s21 or s22 or s26 or s27 or s28 or s29 or s32 or s33 or s34 or s35 or s36 or s37 or s38 or s40 or s41 or s42)) or ((s23 or s27 or s28 or s29 or s32 or s33 or s34 or s35 or s36 or s37 or s38 or s40 or s41 or s42) and N <= grid3dcap) or ((gw1 or gw2 or gw3 or gw4) and (N * outD) <= grid3dcap):   # §15/§19/§20/§21/§24/§25/§26/§27/pred-3/4/5/4.2(ray)/early-dynamics + ★grok-①②③④ diagnostics also run for a single sample (compute Jc iff a consumer panel is ON)
+            if ((multi_ok or s12single) and (s7 or s8 or s9 or s10 or s11 or s12 or s13 or s15 or s16 or s17 or s18 or s19 or s20 or s21 or s22 or s26 or s27 or s28 or s29 or s32 or s33 or s34 or s35 or s36 or s37 or s38 or s40 or s41 or s42)) or ((s23 or s27 or s28 or s29 or s32 or s33 or s34 or s35 or s36 or s37 or s38 or s40 or s41 or s42) and N <= grid3dcap) or ((gw1 or gw2 or gw3 or gw4 or sinit) and (N * outD) <= grid3dcap):   # §15/§19/§20/§21/§24/§25/§26/§27/pred-3/4/5/4.2(ray)/early-dynamics + ★grok-①②③④ + §7 standardinit diagnostics also run for a single sample (compute Jc iff a consumer panel is ON)
                 Jc, out_flat = jac_cols(th, X)
                 rr = (-N * _TL.loss.resid_cotangent(out, Y, N)).reshape(-1)   # generic residual: Y−f (MSE), onehot−softmax (CE)
 
@@ -7294,6 +7354,13 @@ def run_stream(P):
 
             if s29 and eigTick % g3dstride == 0 and (N * outD) <= grid3dcap and Jc is not None and rr is not None:   # §21: residual↔spectrum alignment (NTK + M_r panels). §12 cube cadence; browser stores snapshots + slider
                 sec21 = _sec21_payload(Jc, rr, th, X, N, outD, sec21k)
+            g_sinit = None                                          # §7 (prediction_standardinit): section-6 panels on the FROZEN t=0 ranking + running-max
+            if sinit and eigTick % g3dstride == 0 and (N * outD) <= grid3dcap and Jc is not None and rr is not None:
+                try:
+                    _sipl, sinit_ref = _sec_standardinit_payload(Jc, rr, th, X, N, outD, sinitk, sinit_ref)
+                    _sipl["t"] = t; g_sinit = _sipl
+                except Exception:
+                    g_sinit = None
 
             # report σ₁ per-sample (÷N) so the theory matches the true sharpness λmax(∇²L) ≈ λmax(GN) = σ₁/N
             thPr = [(x / N if x is not None else None) for x in thP] if thP else None
@@ -7332,6 +7399,8 @@ def run_stream(P):
                 "g_ss": g_ss,                                  # SELF-STABILIZATION (ss): cos(∇S,±ssk eigvecs of preconditioned Hessian H_P) [top/bot lists] + p3/p4 projected-gradient cosines
                 "g_qspec": g_qspec,                            # Q-SPECTRUM (qspec): eigenspectra {mr:[...], h:[...], p, full} of Q_r=Σr_kQ_k and H=ΣQ_k, descending. full=True ⇒ all p eigenvalues (MLP); full=False ⇒ top⊕bottom-qspeck
                 "g_s6fix": g_s6fix,                            # §6-FIXED-BASIS (s6f): curvature+alignment along the FROZEN init eigenbasis of M_r & GN {t,k,mr_curv,gn_curv,mr_align,gn_align,mr_lam0,gn_lam0}
+                "g_sinit": g_sinit,                            # §7 (prediction_standardinit): section-6 r↔NTK & Jr↔M_r on the FROZEN t=0 ranking (current eigvecs matched back) + per-position running-max
+
                 "g_gw2": g_gw2,                                # ★grok-② (gw2): direction-change of top-3 Q_r eigvecs — {t,lags:[1,2,5],tau,cos:[[..]×3],count:[3]}
                 "g_gw3": g_gw3,                                # ★grok-③ (gw3): ALL §6 panels (NTK+M_r+GN, 3×4 bars) per Q-mode {ev,fx,rd,lr} + per-mode SLQ M_r spectrum
                 "g_gw4": g_gw4,                                # ★grok-④ (gw4): curvature-subspace persistence {t,k,thr,t0s,refs:{T0:{top_in,top_out,bot_in,bot_out,cap}}}
@@ -8012,6 +8081,8 @@ def _parse_params(q):
         "s28": g("s28", "0") == "1",     # §20: spectral histograms of M_r=Σr_kQ_k (eigvals + λ·|⟨v,u_k⟩| for top-3 right-singular u_k); evolves over training (slider)
         "s28k": max(1, fi("s28k", 40)),  # §20: # eigenpairs per side (top-K ⊕ bottom-K) of M_r in the histogram
         "s29": g("s29", "0") == "1",     # §21: residual↔spectrum alignment — NTK panel (residual onto JJᵀ eigvecs) + M_r panel (J·r onto Σr_kQ_k eigvecs)
+        "sinit": g("sinit", "0") == "1", # §7 (prediction_standardinit): section-6 panels on the FROZEN t=0 ranking (current eigvecs matched back) + per-position running-max
+        "sinitk": int(g("sinitk", "40")),  # §7: NTK top-K & M_r top-K⊕bottom-K per side
         "s29k": max(1, fi("s29k", 40)),  # §21: # NTK eigvecs (top) & M_r eigenpairs per side (top-K ⊕ bottom-K)
         "s30": g("s30", "0") == "1",     # §22: §20 M_r histograms on a frozen-Q quadratic surrogate (freeze at iteration s30t)
         "s31": g("s31", "0") == "1",     # §23: §20 M_r histograms on a random-Hessian quadratic surrogate (rank s31r)
@@ -8455,6 +8526,8 @@ class Handler(BaseHTTPRequestHandler):
             self._static("/eos_widget_prediction/index_prediction_multiclass.html")   # the MULTICLASS prediction widget: same panels, nd-flattened (M=n·d) multiclass datasets (CIFAR-10, MNIST-10, max-finder, modulo); CE + Fisher curvature
         elif u.path in ("/prediction_detailed", "/prediction_detailed/", "/detailed", "/mcd"):
             self._static("/eos_widget_prediction/index_prediction_detailed.html")   # the DETAILED prediction widget (single- + multi-class): the widget + the ★grok panels (diagnostics gw1-4 + page-1 interventions gw5-8) for the ratio→PS→alignment→grokking study. Kept separate so the plain widgets stay pristine.
+        elif u.path in ("/prediction_standardinit", "/prediction_standardinit/", "/standardinit", "/si"):
+            self._static("/eos_widget_prediction/index_prediction_standardinit.html")   # the STANDARD-INIT widget: sections 1-6 + a §7 mirroring section-6 on a FROZEN t=0 eigenvalue ranking (current eigvecs matched back to t=0) + per-position running-max — for studying cycle repetition under standard init
         elif u.path in ("/original", "/original/", "/orig", "/widget"):
             self._static("/index.html")   # the ORIGINAL §1-§28 widget (browser or GPU backend via the Compute dropdown); relative /run + /captures ⇒ same-origin, so it just works from the fleet
         else:
