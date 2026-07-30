@@ -5640,13 +5640,18 @@ def run_stream(P):
                     _rdsc = (abs(mu_ev[0]) if mu_ev else 1.0) / max(4.0 * _qrd, 1.0)   # ≈ divide by the Wishart edge (2√q)²
                     op_rd = lambda v: _rdsc * (Brd @ (Brd.t() @ v) - Crd @ (Crd.t() @ v))
                     mr["rd"], _ = _mrpanel(op_rd)
-                    # "random-low-rank": LOW STABLE rank (few dominant λ) but HIGH true rank — m random orthonormal
-                    #   directions with SIGNED, GEOMETRICALLY-DECAYING eigenvalues (true rank m, stable rank ≈ 1/(1−decay²)).
-                    r_ = min(p, max(gw3rank, 60)); _gen = torch.Generator(device=_dev()); _gen.manual_seed((t * 2654435761) & 0x7FFFFFFF)
-                    Ulr, _ = torch.linalg.qr(torch.randn(p, r_, generator=_gen, dtype=Jm3.dtype, device=_dev()))
-                    _decay = min(0.999, max(0.1, float(P.get("gw3lrdecay", 0.85))))
-                    _signs = torch.randint(0, 2, (r_,), generator=_gen, device=_dev()).to(Jm3.dtype) * 2 - 1
-                    lam_lr = (abs(mu_ev[0]) if mu_ev else 1.0) * _signs * torch.tensor([_decay ** i for i in range(r_)], dtype=Jm3.dtype, device=_dev())
+                    # "random-low-rank": GENUINELY low rank — only a FEW large ± eigenvalues, decaying FAST to ~0, with
+                    #   the remaining p−2k modes EXACTLY zero. The skewed scree: the top-few are large POSITIVE and the
+                    #   bottom-few are large NEGATIVE, BOTH set ABOVE the random-dense edge (amp = gw3lrscale × |M_r top|),
+                    #   with magnitude decaying as gw3mrdecay^i so it collapses toward 0 quickly in between (vs the OLD
+                    #   ≥60-mode, slow-0.85-decay, amp≈edge version whose scree sat flat and BELOW 'random').
+                    _kside = max(2, min(int(P.get("gw3lrk", 8)), max(1, p // 2)))          # few dominant modes PER SIGN
+                    _mrdec = min(0.95, max(0.05, float(P.get("gw3mrdecay", 0.5))))          # FAST magnitude decay ⇒ →0 quickly
+                    _amp = float(P.get("gw3lrscale", 8.0)) * (abs(mu_ev[0]) if mu_ev else 1.0)   # head/tail well ABOVE 'random'
+                    _lrnnz = 2 * _kside; _gen = torch.Generator(device=_dev()); _gen.manual_seed((t * 2654435761) & 0x7FFFFFFF)
+                    Ulr, _ = torch.linalg.qr(torch.randn(p, _lrnnz, generator=_gen, dtype=Jm3.dtype, device=_dev()))
+                    _geo = _amp * torch.tensor([_mrdec ** i for i in range(_kside)], dtype=Jm3.dtype, device=_dev())
+                    lam_lr = torch.cat([_geo, -_geo])                                      # +head (decaying) ⊕ −tail (decaying); rest of p ZERO
                     op_lr = lambda v: Ulr @ (lam_lr * (Ulr.t() @ v))
                     mr["lr"], _ = _mrpanel(op_lr)
                     g_gw3 = {"t": t, "rank": r_, "K": Klan,
@@ -5726,13 +5731,17 @@ def run_stream(P):
                     # WIDE log grid of init scales (default 100 points, σ ∈ 10^[-1.5,1.5] ≈ 0.03 … 32).
                     _s1lo = float(P.get("gw1siglo", -3.0)); _s1hi = float(P.get("gw1sighi", 1.5))   # log10 σ range: extended DOWN to 1e-3 (was 10^-1.5≈0.03) so the small-init regime is sampled alongside the large values
                     sig = [float(10.0 ** (_s1lo + (_s1hi - _s1lo) * i / (gw1n - 1))) for i in range(gw1n)]
-                    _startfrac = float(P.get("gw1startfrac", 0.25))   # ★ keep only σ whose INIT sharpness ≤ startfrac·(2/lr) — every run starts well below EoS
+                    _startfrac = float(P.get("gw1startfrac", 0.0))   # ★ 0 (DEFAULT) ⇒ KEEP EVERY σ (all gw1n points plotted): the per-σ
+                    # ADAPTIVE lr = β·2/λmax already holds sharpness·lr≈0.2 ≪ 2 for EVERY σ, so no run starts at/above EoS regardless
+                    # of init scale — the old hard drop (startfrac=0.25 ⇒ only ~15/100 survived) was redundant. Set >0 to re-enable it.
                     _eos = 2.0 / max(lr, 1e-9)
                     pts = []
                     for s_ in sig:
                         ths = (s_ * th0s).detach().clone()
                         sharp0 = float(lanczos_extreme_vals(lambda v: hvpL(ths, X, Y, v), p, 1, min(p, 24), 0x5EED1)[0][0])   # init sharpness λmax(∇²L)
-                        if sharp0 > _startfrac * _eos:                # ★ drop σ that would START at/above ~¼·(2/lr): keep the low-sharpness inits only
+                        if not math.isfinite(sharp0):                # drop only genuinely degenerate σ (non-finite sharpness)
+                            continue
+                        if _startfrac > 0.0 and sharp0 > _startfrac * _eos:   # optional (off by default) EoS-headroom filter
                             continue
                         o_ = _TL.model.forward(ths, X); rr_ = (Y - o_); r_ = rr_.reshape(-1)[:M]; rc_ = rr_.reshape(N, outD)
                         rn_ = float(r_.norm()) + 1e-30
@@ -7859,6 +7868,7 @@ def _parse_params(q):
         "gw2tau": float(g("gw2tau", "0.5")),  # ★grok-② τ threshold for the switch counter
         "gw3": g("gw3", "0") == "1",     # ★grok-③ §6 phases under {evolving, init-fixed, random, random-low-rank} Q + per-mode SLQ M_r spectrum
         "gw3rank": int(g("gw3rank", "4")), "gw3k": int(g("gw3k", "20")),    # ★grok-③ rank r of random-low-rank Q + §6 top/bot-K
+        "gw3lrk": int(g("gw3lrk", "8")), "gw3mrdecay": float(g("gw3mrdecay", "0.5")), "gw3lrscale": float(g("gw3lrscale", "8.0")),   # ★grok-③ random-low-rank M_r scree: #dominant modes PER sign, magnitude decay^i, head/tail amplitude = scale×|M_r top| (skewed: few large ±, ≈0 between)
         "gw3full": g("gw3full", "0") == "1",  # ★grok-③ low-rank build: matched-spectrum (0) vs fully-random (1)
         "gw3p0rank": int(g("gw3p0rank", "8")), "gw3p0reexp": int(g("gw3p0reexp", "25")),   # ★Panel-0: low-rank Q rank + evolving-Q re-expand cadence
         "gw3p0lrdecay": float(g("gw3p0lrdecay", "0.5")),   # ★Panel-0 random-low-rank Q spectral decay: mode i ∝ decay^i ⇒ skewed spectrum (few large ± eigs, rest →0). Smaller = more skewed.
