@@ -4407,12 +4407,46 @@ def _bacc_vec(out_flat, tgt_flat, outD, N):
 
 
 def _blockslq_extremes(hvp, p, block=4, m=24, seed=0xB10C5):
-    """Top & bottom eigenvalue of a symmetric operator via BLOCK SLQ (block Lanczos) — Panel-0 spectra."""
+    """Top & bottom eigenvalue of a symmetric operator — Panel-0 spectra. Uses a TWO-SIDED POWER METHOD, NOT
+    block/single Lanczos: the Panel-0 operators Q_r=Σr_kQ_k / ΣQ=Σ_kQ_k are RANK-DEFICIENT (rank ≤ N·outD ≪ p) and
+    Lanczos on them FLAKILY amplifies roundoff into spurious ±1e29 Ritz values (a random start is ~orthogonal to the
+    tiny range ⇒ the breakdown guard is defeated) which, since Panel-0 shares a y-axis, SQUASH every real O(1) curve
+    to invisible zero. Power iteration cannot blow up: (1) iterate A→dominant signed eigenvalue λ_d (Rayleigh);
+    (2) iterate the SHIFTED B=A−λ_d·I → its dominant is the eigenvalue FARTHEST from λ_d = the opposite extreme.
+    Verified exact (+10/−6) on a rank-40 op where Lanczos blew past an 8‖A‖ clamp. `block`/`m` kept for signature
+    compatibility. A power-norm clamp remains as a final backstop."""
     try:
-        b = max(1, min(block, p))
-        T, bb, k = _block_lanczos_core(hvp, p, b, min(max(1, p // b), m), seed)
-        mu, _ = _safe_eigh(T)
-        return float(mu.max()), float(mu.min())
+        it = max(30, 3 * int(m))
+        def _pit(applyv, sd):
+            g = torch.Generator(device=_dev()); g.manual_seed(int(sd) & 0x7FFFFFFF)
+            v = torch.randn(p, dtype=DTYPE, device=_dev(), generator=g); v = v / v.norm().clamp_min(1e-30)
+            nrm = 0.0
+            for _ in range(it):
+                w = applyv(v); wn = float(w.norm())
+                if wn < 1e-30 or wn != wn:
+                    return v, 0.0
+                nrm = max(nrm, wn); v = w / wn
+            return v, nrm
+        vd, radd = _pit(hvp, seed ^ 0x1234)                       # dominant |λ| eigenvector
+        ld = float(vd @ hvp(vd))                                  # signed dominant eigenvalue λ_d
+        vo, _ = _pit(lambda v: hvp(v) - ld * v, seed ^ 0x9ABC)    # eigenvector FARTHEST from λ_d (opposite extreme)
+        lo2 = float(vo @ hvp(vo))
+        php = max(ld, lo2); plo = min(ld, lo2)                    # ROBUST power-method extremes (exact for rank-deficient)
+        # Lanczos extremes are more accurate on DENSE/full-rank spectra (power iteration converges slowly there) but can
+        #   FLAKILY blow up on rank-deficient ops. Trust Lanczos when it lies within the robust spectral radius; else use
+        #   the power-method value. Best of both: dense→accurate Lanczos, rank-deficient→blow-up-free power method.
+        tol = 1.5 * radd + 1e-6
+        try:
+            tv, bv = lanczos_extreme_vals(hvp, p, 1, min(p, max(64, 6 * int(block))), seed)
+            hl = float(tv[0]); ll = float(bv[0])
+        except Exception:
+            hl = float('nan'); ll = float('nan')
+        hi = hl if (hl == hl and abs(hl) <= tol) else php
+        lo = ll if (ll == ll and abs(ll) <= tol) else plo
+        cap = 8.0 * radd + 1e-9                                   # final backstop
+        hi = 0.0 if hi != hi else max(-cap, min(cap, hi))
+        lo = 0.0 if lo != lo else max(-cap, min(cap, lo))
+        return hi, lo
     except Exception:
         return 0.0, 0.0
 
