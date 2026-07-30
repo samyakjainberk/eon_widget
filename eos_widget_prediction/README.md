@@ -130,6 +130,15 @@ tracks the latest tick live.
 - **Multiclass variant** — `index_prediction_multiclass.html` mirrors these forecasts for **multi-class /
   cross-entropy** output (defaults to the `maxfind` dataset with CE loss; `modadd`, CIFAR-10 and MNIST also
   available), using the p×p Gauss–Newton **Fisher** curvature. Open it at `/prediction_multiclass`.
+- **Standard-init variant** — `index_prediction_standardinit.html` adds a **§7** that mirrors section-6's two
+  projection panels on a ranking **frozen at initialization**. At *t=0* the NTK (`JJᵀ`) and `M_r=Σ_k r_kQ_k`
+  are eigendecomposed and their eigenvectors + eigenvalues are frozen (that ordering is the x-axis for the whole
+  run); at every step the **current** eigenvectors are matched back to their closest *t=0* direction (max `|cos|`)
+  and each projection is placed at that frozen slot, with panels 3–4 tracking the per-position **running max** over
+  `t'≤t`. Because rank *i* always means the same *t=0* direction, you can follow each init-direction and watch the
+  saddle-to-saddle **cycles repeat** under standard init. Open it at `/prediction_standardinit` (or `/si`).
+- **Detailed / grok variant** — `index_prediction_detailed.html` adds the ★grok diagnostic + intervention panels
+  (the ratio → progressive-sharpening → alignment → grokking study). Open it at `/prediction_detailed` (or `/detailed`).
 - **Offline capture / replay** — `eos_prediction.py` (scalar) and `eos_prediction_multiclass.py` (multiclass)
   run this widget's compute **headless** and merge the prediction stream **and** the Prediction-1&2 sweep into
   one self-contained `.json` you reload with **⬆ load run** — no live server needed. See

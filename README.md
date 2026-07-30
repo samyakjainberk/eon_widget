@@ -118,7 +118,9 @@ training run is identical in all three.**
 server.py                     the GPU server; opens the prediction widget at http://localhost:<port>/
 index.html                    the no-server, browser-only widget
 eos_widget_prediction/        the prediction-widget pages (index_prediction.html = binary/MSE,
-                              index_prediction_multiclass.html = multiclass/CE) + a detailed README
+                              index_prediction_multiclass.html = multiclass/CE,
+                              index_prediction_standardinit.html = + §7 frozen-t0-ranking cycle study (/prediction_standardinit),
+                              index_prediction_detailed.html = + grok diagnostics (/prediction_detailed)) + a detailed README
 eos_lab/                      Python package for headless / cluster runs
 capture_run.py                save a main-widget run to a .json the widget can reload offline
 eos_prediction.py             headless capture for the prediction widget (predictions + sweep → one loadable .json)
