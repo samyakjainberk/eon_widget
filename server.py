@@ -3045,6 +3045,7 @@ def _lanczos_core(hvp, p, m, seed, dt=None, q0=None):
     for _ in range(min(p, m)):
         Q.append(q)
         w = hvp(q)
+        wscale = float(w.norm())                    # ‖A·q‖ — scale for the RELATIVE breakdown test (rank-deficient ops)
         a = (w @ q)
         al.append(float(a))
         w = w - a * q - beta * qp
@@ -3053,8 +3054,8 @@ def _lanczos_core(hvp, p, m, seed, dt=None, q0=None):
             w = w - Qm.t() @ (Qm @ w)
         beta = w.norm()
         be.append(float(beta))
-        if float(beta) < 1e-10:
-            break
+        if float(beta) < 1e-7 * wscale + 1e-30:     # ★ RELATIVE breakdown (was absolute 1e-10): once the Krylov space
+            break                                   #   saturates a rank-deficient operator's rank the residual is roundoff
         qp = q
         q = w / beta
     k = len(Q)
@@ -3182,6 +3183,7 @@ def _block_lanczos_core(hvp, p, b, m, seed, dt=None):
     for _ in range(min(max(1, p // b), m)):
         Qblocks.append(Qj)
         W = torch.stack([hvp(Qj[:, c]) for c in range(b)], dim=1)   # (p×b) = A·Q_j (b single-vector HVPs)
+        wscale = float(W.abs().max())                               # scale of the operator application (for the RELATIVE breakdown test)
         Aj = Qj.t() @ W
         Aj = 0.5 * (Aj + Aj.t())                                     # symmetrize the diagonal block
         A.append(Aj)
@@ -3189,10 +3191,15 @@ def _block_lanczos_core(hvp, p, b, m, seed, dt=None):
         Qall = torch.cat(Qblocks, dim=1)                             # full reorthogonalization (twice) vs all prior blocks
         for _ in range(2):
             W = W - Qall @ (Qall.t() @ W)
+        # ★ RELATIVE breakdown BEFORE QR: once the block-Krylov space saturates the operator's TRUE RANK (always the case
+        #   for the rank-deficient PSD Gauss-Newton G=JᵀJ, rank ≤ M=N·outD), the residual W is only roundoff. The OLD
+        #   absolute guard (‖Bj‖<1e-10) never fired, so QR renormalized that roundoff back to a UNIT block and the
+        #   three-term recurrence re-amplified it every step ⇒ spurious eigenvalues ±1e5+ (exact max ~70) that survived
+        #   the nonneg clamp (only the negatives are clamped). Break when the residual is negligible vs the op scale.
+        if float(W.abs().max()) < 1e-7 * wscale + 1e-30:
+            break                                                    # do NOT QR-renormalize roundoff into a phantom Krylov direction
         Qnext, Bj = torch.linalg.qr(W)                              # (p×b), (b×b) upper-triangular
         B.append(Bj)
-        if float(Bj.abs().max()) < 1e-10:
-            break
         Qprev = Qj; Bprev = Bj; Qj = Qnext
     k = len(A); kb = k * b
     T = torch.zeros(kb, kb, dtype=torch.float64)
@@ -4139,7 +4146,9 @@ def _grok_heldout(dataset, Nte, inD, outD, seed, P):
     try:
         if dataset == "maxfind":  return load_maxfind(Nte, inD, s)
         if dataset == "modadd":   return load_modadd(Nte, outD, s)
-        if dataset == "ksparse":  return load_ksparse(Nte, inD, P.get("ksparse", 3), s)
+        # ★ ksparse: keep the TRAIN seed's parity subset S (offsetting the seed changes the parity FUNCTION ⇒ test≈chance);
+        #   _ksparse_testset preserves S and draws fresh bits from a disjoint stream.
+        if dataset == "ksparse":  return _ksparse_testset(Nte, inD, int(P.get("ksparse", 3)), int(seed), DTYPE)
         if dataset == "cifar10":  return load_cifar(Nte, s)
         if dataset == "mnist":    return load_mnist(Nte, s)
     except Exception:
@@ -4622,11 +4631,13 @@ def _gd_step(X, Y, lr):
     return lambda th: th - lr * _opt_dir(_TL.model, gradL(th, X, Y)[0], "gd")
 
 
-def _gd_step_ramp(X, Y, lr0, alpha, T):
+def _gd_step_ramp(X, Y, lr0, alpha, T, st=None):
     """★grok-⑥ baseline: GD whose lr RAMPS additively over the run — lr_t = (1 + (α−1)·t/T)·lr₀, t = internal
     step counter. Same schedule as the interval output-scaling (α_t: 1→α, equally spaced), so the 'lr-scaling'
-    baseline (unscaled targets, ramped lr) is the direct counterpart of the 'output-scaling' run (ramped targets)."""
-    st = {"t": 0}
+    baseline (unscaled targets, ramped lr) is the direct counterpart of the 'output-scaling' run (ramped targets).
+    Pass a SHARED `st` dict so the ramp counter persists across per-minibatch rebuilds (else minibatch mode resets
+    t=0 every step ⇒ lr never ramps ⇒ the baseline is no longer the matched lr_t=α_t·lr₀ comparison)."""
+    st = st if st is not None else {"t": 0}
     def step(th):
         a_t = 1.0 + (alpha - 1.0) * min(1.0, st["t"] / max(T, 1))
         st["t"] += 1
@@ -4691,20 +4702,31 @@ def _opt_step_sched(X, Y, N, outD, lr0, safety, rule, lam1, lam2, xval, sign):
     descent for every |λ|<1 (the natural sweep is [−0.9,0.9]), so this cap essentially never fires for star — it just
     guards the TAYLOR rule / pathological lr. Both rules now DESCEND for all λ in range; the λ-dependence shows as the
     descent RATE and in the PS / ratio / alignment panels rather than as loss divergence. `safety` is unused now."""
-    st = {"Lref": None}
-    def _apply(th, eta):
-        return _opt_step_taylor(X, Y, N, outD, eta, lam1, lam2)(th) if rule == "taylor" else _opt_step_star(X, Y, N, outD, eta, xval, sign)(th)
+    M = N * outD; _mlo, _mhi, _cbeta = 0.02, 2.0, 0.9
+    st = {"Lref": None, "ce": None}                              # ce = the STAR rule's EMA of |c|, PERSISTED across steps
+    def _star_dir(th):                                           # compute (mult, ∇L) ONCE per step; advances the EMA once
+        gL = gradL(th, X, Y)[0]
+        o = _TL.model.forward(th, X); rc = (-N * _TL.loss.resid_cotangent(o, Y, N)).reshape(-1)[:M].reshape(N, outD)
+        c = float(gL @ hvpS(th, X, gL, rc)) / (float(gL.norm()) ** 2 + 1e-30)
+        ac = abs(c)
+        st["ce"] = ac if st["ce"] is None else _cbeta * st["ce"] + (1.0 - _cbeta) * ac   # ★ EMA now accumulates across the trajectory
+        cn = c / (st["ce"] + 1e-12)                              # scale-free O(1) signal
+        return min(_mhi, max(_mlo, 1.0 - sign * xval * math.tanh(cn))), gL
     def step(th):
         if st["Lref"] is None:
             st["Lref"] = float(_TL.loss.value(_TL.model.forward(th, X), Y, N))
-        eta = lr0                                                # ★FIXED lr — same for every run, no σ schedule
         ceil = 3.0 * max(st["Lref"], 1e-9)                       # FIXED cap (no compounding L0 term)
-        thp = _apply(th, eta)
+        if rule == "taylor":
+            _apply = lambda eta: _opt_step_taylor(X, Y, N, outD, eta, lam1, lam2)(th)
+        else:                                                    # STAR: EMA advances ONCE/step here; backtrack only rescales η (NOT the closure)
+            _mult, _gL = _star_dir(th)
+            _apply = lambda eta: th - eta * _mult * _gL
+        eta = lr0; thp = _apply(eta)                             # ★FIXED lr — same for every run, no σ schedule
         for _ in range(9):                                       # anti-blowup backtrack (only fires when a step exceeds the cap)
             if torch.isfinite(thp).all():
                 Lp = float(_TL.loss.value(_TL.model.forward(thp, X), Y, N))
                 if Lp == Lp and Lp <= ceil: return thp
-            eta *= 0.5; thp = _apply(th, eta)
+            eta *= 0.5; thp = _apply(eta)
         return th                                                # FREEZE: no η holds it under the cap (only divergent star runs reach here)
     return step
 
@@ -4965,7 +4987,13 @@ def run_stream(P):
         try:
             _Pte = dict(P); _Pte["seed"] = (int(P["seed"]) + 987654) & 0x7FFFFFFF
             _Nte = (Nfull + max(3, Nfull // 3)) if dataset in ("chebyshev", "chebyshev2") else Nfull
-            _, Xtest, Ytest, _, _ = init_data_theta(_Pte, dataset, _Nte, inD, outD); Ntest = int(Xtest.shape[0])
+            if dataset == "ksparse":
+                # ★ ksparse: the parity SUBSET S is itself seeded (perm from seed^0x4B5A11), so offsetting the seed would
+                #   pick a DIFFERENT parity function ⇒ test labels unrelated to train ⇒ test-acc stuck at chance forever.
+                #   _ksparse_testset keeps the TRAIN seed's subset S and draws fresh bits from a disjoint stream.
+                Xtest, Ytest = _ksparse_testset(_Nte, inD, int(P.get("ksparse", 3)), int(P["seed"]), DTYPE); Ntest = int(Xtest.shape[0])
+            else:
+                _, Xtest, Ytest, _, _ = init_data_theta(_Pte, dataset, _Nte, inD, outD); Ntest = int(Xtest.shape[0])
         except Exception:
             Xtest = Ytest = None; Ntest = 0
     _qcfg = _qcfg_setup(P, th, X, M)   # qinit toggle: evolve (default) | fix@θ_t | gauss/bern/unif random Q
@@ -5305,7 +5333,7 @@ def run_stream(P):
             # §24: A = J Jᵀr (NTK·r, the 1st-order Δf under a GD step) and B = (η/2N)·[(J·r)ᵀQ_k(J·r)]_k (2nd-order Δf).
             # Report ‖·‖, |cos|, and eigval-weighted projections of A,B onto the residual r and the top-4 NTK eigvecs u_i.
             g24 = None
-            if s32 and dataset != "owt" and Jc is not None and rr is not None:
+            if s32 and dataset != "owt" and Jc is not None and rr is not None and (N * outD) <= grid3dcap:   # ★ M=N·outD gate (was missing): §24 forms a dense M×M NTK Gram + sym_eig_desc (O(M²) mem, O(M³) compute) — must self-skip at large M like every sibling section
                 Jg24 = Jc[:M]; r24 = rr[:M]                         # M=N·outD effective-sample rows + residual (slice like §20/§21; guards GPT-LM)
                 Jr24 = Jg24.t() @ r24                               # J·r = Σ_k r_k ∇f_k (p,)
                 A24 = Jg24 @ Jr24                                   # A = J Jᵀ r = NTK·r (M,)
@@ -5817,8 +5845,11 @@ def run_stream(P):
                     # dataset generator — so test loss/acc always populate (every dataset) and N is large enough to
                     # separate memorization from generalization. init_data_theta covers all datasets uniformly.
                     _, Xtr_g, Ytr_g, _, _ = init_data_theta(P, dataset, gw_nsamp, inDimE, outDimE); Ntr_g = Xtr_g.shape[0]
-                    Pte = dict(P); Pte["seed"] = (int(P["seed"]) + 987654) & 0x7FFFFFFF
-                    _, Xte_g, Yte_g, _, _ = init_data_theta(Pte, dataset, gw_nte, inDimE, outDimE); Nte_g = Xte_g.shape[0]
+                    if dataset == "ksparse":   # ★ keep the TRAIN seed's parity subset (see _grok_heldout / §1 overlay)
+                        Xte_g, Yte_g = _ksparse_testset(gw_nte, inDimE, int(P.get("ksparse", 3)), int(P["seed"]), DTYPE); Nte_g = Xte_g.shape[0]
+                    else:
+                        Pte = dict(P); Pte["seed"] = (int(P["seed"]) + 987654) & 0x7FFFFFFF
+                        _, Xte_g, Yte_g, _, _ = init_data_theta(Pte, dataset, gw_nte, inDimE, outDimE); Nte_g = Xte_g.shape[0]
                 except Exception:
                     Xtr_g = Ytr_g = Xte_g = Yte_g = None; Ntr_g = Nte_g = 0
             if (gw5 or gw6 or gw7 or gw8 or gw9 or gw10) and Xtr_g is None:
@@ -5886,8 +5917,9 @@ def run_stream(P):
                         # BASELINE (same colour, DOTTED): UNSCALED targets but lr RAMPED the SAME way — lr_t=α_t·lr₀ (interval)
                         #   or the constant lr·α (init) — so the lr-scaling baseline mirrors the output-scaling schedule exactly.
                         if gw6mode == "interval":
-                            _bstep = _gd_step_ramp(Xtr_g, Ytr_g, lr, a_, gw_steps)
-                            _mkb = (lambda Xb, Yb, Nb, _a=a_: _gd_step_ramp(Xb, Yb, lr, _a, gw_steps))
+                            _rampst = {"t": 0}   # ★ SHARED ramp counter ⇒ persists across per-minibatch rebuilds (else lr never ramps in minibatch mode)
+                            _bstep = _gd_step_ramp(Xtr_g, Ytr_g, lr, a_, gw_steps, _rampst)
+                            _mkb = (lambda Xb, Yb, Nb, _a=a_, _s=_rampst: _gd_step_ramp(Xb, Yb, lr, _a, gw_steps, _s))
                             _bname = f"α={a_:.2g} · unscaled·lr_t=α_t·lr₀"
                         else:
                             _lrb = lr * a_
