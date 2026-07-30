@@ -5657,7 +5657,7 @@ def run_stream(P):
                     lam_lr = torch.cat([_geo, -_geo])                                      # +head (decaying) ⊕ −tail (decaying); rest of p ZERO
                     op_lr = lambda v: Ulr @ (lam_lr * (Ulr.t() @ v))
                     mr["lr"], _ = _mrpanel(op_lr)
-                    g_gw3 = {"t": t, "rank": r_, "K": Klan,
+                    g_gw3 = {"t": t, "rank": _lrnnz, "K": Klan,
                              "ntk": ntk,                                          # {ev,fx,rd,lr} — 4 J-variants (evolving/init-fixed/random/random-low-rank)
                              "gn": {"cg": cg, "gp1": gp1, "gp2": gp2, "gp3": gp3, "gp4": gp4, "ng": ng},
                              "mr": mr}
