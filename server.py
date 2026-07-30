@@ -3102,8 +3102,16 @@ def _lanczos_core(hvp, p, m, seed, dt=None, q0=None):
             w = w - Qm.t() @ (Qm @ w)
         beta = w.norm()
         be.append(float(beta))
-        if float(beta) < 1e-7 * wscale + 1e-30:     # ★ RELATIVE breakdown (was absolute 1e-10): once the Krylov space
-            break                                   #   saturates a rank-deficient operator's rank the residual is roundoff
+        if float(beta) < 1e-7 * wscale + 1e-30:     # ★ breakdown (rank-deficient op ⇒ residual is roundoff): FREEZE, do
+            #   NOT break. Breaking returns k < m Ritz values, and a consumer that indexes a FIXED top-K (e.g. §12 per-
+            #   sample eigvecs, gw diagnostics) then reads out of bounds ⇒ a CUDA device-side assert that poisons the
+            #   context and crashes the whole run. Freezing (q←0, β←0) keeps iterating to m so k==m ALWAYS; the frozen
+            #   steps contribute 0 eigenvalues (spurious, sort to the bottom, excluded downstream) and add no roundoff
+            #   vector to the basis (kills the blow-up too). Mirrors batched_lanczos_extreme's freeze.
+            be[-1] = 0.0
+            qp = q
+            q = torch.zeros(p, dtype=dt, device=_dev())
+            continue
         qp = q
         q = w / beta
     k = len(Q)
