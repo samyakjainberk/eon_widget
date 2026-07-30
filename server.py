@@ -3718,7 +3718,9 @@ class TunedSplineMlpModel(AutogradModel):
     def __init__(self, inDim, width, depth, outDim, useBias, nc=50, srange=5.0, kappa=1.5, objective="max"):
         super().__init__()
         self.nc = int(nc); self.srange = float(srange); self.kappa = float(kappa)
-        self.objective = ("min" if str(objective) == "min" else "max")   # "max" (bsplinetuned) RAISES gᵀM_rg/gᵀJJᵀg; "min" (bsplinetuned2) LOWERS it
+        self.objective = str(objective) if str(objective) in ("max", "min", "diffmax", "diffmin") else "max"
+        # "max"/"min" (bsplinetuned/2): RAISE / LOWER the RATIO |gᵀM_rg|/gᵀJJᵀg.
+        # "diffmax"/"diffmin" (bsplinetuned3/4): RAISE / LOWER the SIGNED DIFFERENCE gᵀM_rg − gᵀJJᵀg.
         self.useBias = (useBias == "1" or useBias is True or useBias == 1)
         dims = [int(inDim)] + [int(width)] * int(depth) + [int(outDim)]
         self.nlayers = len(dims) - 1
@@ -3741,18 +3743,22 @@ class TunedSplineMlpModel(AutogradModel):
 
     def tune(self, th, X, Y, N, outD, gsteps=80, glr=0.01):
         """FINE-TUNE the spline control points ψ ON THE FLY each run — NOT a hardcoded/predefined activation. Two stages:
-        (1) a cheap grid WARM-START, then (2) GRADIENT descent/ascent on the ratio |gᵀM_r g|/gᵀJJᵀg — Adam directly on the
-        nc control points ψ via explicit double-backward — with a soft penalty keeping both norms ≤ κ× tanh's. The final
-        ψ is a genuinely optimized shape. Falls back to the grid ψ if the grad stage misbehaves. Re-run each time (grok-⑧
-        tunes on its own train set), so the activation adapts to the data/model.
-        objective="max" (bsplinetuned): RAISE the ratio — warm-start over CUP shapes {x·sin(βx), x·tanh(βx), √(x²+c)−√c}
-          (high, consistently-signed φ″ but low φ′ ⇒ big 2nd/1st-order ratio), then gradient ASCENT.
-        objective="min" (bsplinetuned2): LOWER the ratio — warm-start over gently-saturating LOW-CURVATURE shapes
-          (small φ″ ⇒ tiny M_r ⇒ small ratio) then gradient DESCENT. Same κ norm-cap; the min route shrinks the M_r
-          numerator (penalty stays slack) rather than inflating JJᵀ (which the cap forbids)."""
+        (1) a cheap grid WARM-START, then (2) GRADIENT descent/ascent on the objective — Adam directly on the nc control
+        points ψ via explicit double-backward — with a soft penalty keeping both curvature norms |gᵀM_r g|, gᵀJJᵀg ≤ κ×
+        tanh's (so nothing blows up). Falls back to the grid ψ if the grad stage misbehaves. Re-run each time (grok-⑧
+        tunes on its own train set), so the activation adapts to the data/model. FOUR objectives, all on the same two
+        curvature quantities gᵀM_r g (SIGNED; M_r=Σ_k r_kQ_k residual-weighted output Hessian) and gᵀJJᵀg=‖Jg‖²≥0:
+          "max"  (bsplinetuned) : maximize the RATIO |gᵀM_r g|/gᵀJJᵀg  (cup warm-starts: high consistent φ″, low φ′)
+          "min"  (bsplinetuned2): minimize the RATIO                    (low-curvature warm-starts ⇒ tiny M_r)
+          "diffmax" (bsplinetuned3): maximize the SIGNED DIFF gᵀM_r g − gᵀJJᵀg  (push M_r-curvature UP, ‖Jg‖² DOWN)
+          "diffmin" (bsplinetuned4): minimize the SIGNED DIFF          (push gᵀM_r g NEGATIVE and/or ‖Jg‖² UP)
+        The κ cap bounds |gᵀM_r g|≤κ·|·|₀ and gᵀJJᵀg≤κ·(·)₀, so every objective (ratio or signed diff) stays finite."""
         M = N * outD; kn = self._knots; th = th.detach()
-        _maxi = (self.objective != "min")           # True ⇒ maximize ratio, False ⇒ minimize it
+        _ratio = self.objective in ("max", "min")                     # ratio objective vs signed-difference objective
+        _maxi = self.objective in ("max", "diffmax")                  # ascent vs descent
         _better = (lambda a, b: a > b) if _maxi else (lambda a, b: a < b)
+        def _score(mrg_s, jjg):                                       # the tracked scalar (mrg_s is SIGNED gᵀM_r g)
+            return (abs(mrg_s) / (jjg + 1e-30)) if _ratio else (mrg_s - jjg)
 
         def norms_ng(psi):                                                           # no-grad metrics (for the grid + norm bounds)
             self.psi = psi.detach()
@@ -3760,21 +3766,24 @@ class TunedSplineMlpModel(AutogradModel):
             r = rr[:M]; rc = r.reshape(N, outD); g = self.vjp(th, X, rc)[0]
             fp = self.forward(th + EPS * g, X); fm = self.forward(th - EPS * g, X)
             Jg = ((fp - fm) / (2.0 * EPS)).reshape(-1)[:M]
-            return abs(float(g @ hvpS(th, X, g, rc))), float((Jg ** 2).sum())
-        mrg0, jjg0 = norms_ng(torch.tanh(kn)); r0 = mrg0 / (jjg0 + 1e-30)
+            return float(g @ hvpS(th, X, g, rc)), float((Jg ** 2).sum())             # SIGNED gᵀM_r g, gᵀJJᵀg
+        mrg0_s, jjg0 = norms_ng(torch.tanh(kn)); mrg0 = abs(mrg0_s) + 1e-30          # |·|₀ = penalty magnitude scale
+        base_score = _score(mrg0_s, jjg0)
 
-        if _maxi:
-            cands = [torch.tanh(kn)] + [kn * torch.sin(b * kn) for b in (1., 2., 3., 4.)] \
-                    + [kn * torch.tanh(b * kn) for b in (.5, 1., 2., 3.)] + [torch.sqrt(kn * kn + c) - c ** .5 for c in (.05, .2, .5, 1.)]
-        else:                                                                        # LOW-curvature shapes ⇒ small M_r ⇒ small ratio
-            cands = [torch.tanh(kn)] + [torch.tanh(b * kn) for b in (.5, .3, .15)] + [b * kn for b in (1., .6, .3)] \
-                    + [torch.special.erf(b * kn) for b in (.6, .3)]
-        best_psi, best_r = torch.tanh(kn), r0
+        cup = [kn * torch.sin(b * kn) for b in (1., 2., 3., 4.)] + [kn * torch.tanh(b * kn) for b in (.5, 1., 2., 3.)] \
+              + [torch.sqrt(kn * kn + c) - c ** .5 for c in (.05, .2, .5, 1.)]        # high consistent φ″ ⇒ big +gᵀM_r g
+        lowc = [torch.tanh(b * kn) for b in (.5, .3, .15)] + [b * kn for b in (1., .6, .3)]   # low φ″ ⇒ tiny M_r
+        if self.objective == "max":       cands = [torch.tanh(kn)] + cup
+        elif self.objective == "min":     cands = [torch.tanh(kn)] + lowc + [torch.special.erf(b * kn) for b in (.6, .3)]
+        elif self.objective == "diffmax": cands = [torch.tanh(kn)] + cup + lowc      # want +gᵀM_r g large, ‖Jg‖² small
+        else:                             cands = [torch.tanh(kn)] + [-c for c in cup] + lowc   # diffmin: CONCAVE (−cup) ⇒ NEGATIVE gᵀM_r g
+        best_psi, best_r = torch.tanh(kn), base_score
         for psi in cands:
-            mrg, jjg = norms_ng(psi); rr_ = mrg / (jjg + 1e-30)
-            if mrg <= self.kappa * mrg0 and jjg <= self.kappa * jjg0 and _better(rr_, best_r): best_psi, best_r = psi, rr_
+            mrg_s, jjg = norms_ng(psi)
+            if abs(mrg_s) <= self.kappa * mrg0 and jjg <= self.kappa * jjg0 and _better(_score(mrg_s, jjg), best_r):
+                best_psi, best_r = psi, _score(mrg_s, jjg)
 
-        try:                                                                         # gradient refinement of ψ (differentiable ratio)
+        try:                                                                         # gradient refinement (differentiable objective)
             def ratio_norms(psi):
                 self.psi = psi
                 thl = th.clone().requires_grad_(True)
@@ -3782,7 +3791,7 @@ class TunedSplineMlpModel(AutogradModel):
                 rr = (-N * _TL.loss.resid_cotangent(o.reshape(N, outD), Y, N)).reshape(-1)[:M]; r = rr.detach()
                 g, = torch.autograd.grad((o * r).sum(), thl, create_graph=True)                    # g = Jᵀr
                 Mg, = torch.autograd.grad((g * g.detach()).sum(), thl, create_graph=True)          # M_r g
-                gMrg = (g * Mg).sum()
+                gMrg = (g * Mg).sum()                                                              # SIGNED
                 v = torch.zeros_like(o, requires_grad=True)
                 Jtv, = torch.autograd.grad(o, thl, grad_outputs=v, create_graph=True)              # Jᵀv
                 Jg, = torch.autograd.grad(Jtv, v, grad_outputs=g, create_graph=True)               # Jg
@@ -3793,30 +3802,31 @@ class TunedSplineMlpModel(AutogradModel):
             for _ in range(int(gsteps)):
                 opt.zero_grad()
                 gMrg, gJJg = ratio_norms(psi)
-                ratio = gMrg.abs() / (gJJg + 1e-20)
+                obj = (gMrg.abs() / (gJJg + 1e-20)) if _ratio else (gMrg - gJJg)                   # RATIO or SIGNED DIFF
                 pen = torch.relu(gMrg.abs() / mrg0 - self.kappa) ** 2 + torch.relu(gJJg / jjg0 - self.kappa) ** 2
-                ((-ratio if _maxi else ratio) + 5.0 * pen).backward()          # ASCENT (max) or DESCENT (min) on the ratio
+                ((-obj if _maxi else obj) + 5.0 * pen).backward()             # ASCENT (max/diffmax) or DESCENT (min/diffmin)
                 if psi.grad is not None and torch.isfinite(psi.grad).all(): opt.step()
                 with torch.no_grad():
-                    rv = float(gMrg.abs() / (gJJg + 1e-20))
+                    rv = float((gMrg.abs() / (gJJg + 1e-20)) if _ratio else (gMrg - gJJg))
                     if float(gMrg.abs()) <= self.kappa * mrg0 and float(gJJg) <= self.kappa * jjg0 and _better(rv, gb_r):
                         gb_psi, gb_r = psi.detach().clone(), rv
             best_psi, best_r = gb_psi, gb_r
         except Exception:
             pass
 
-        self.psi = best_psi.detach(); self.tune_gain = float(best_r / (r0 + 1e-30))
-        self.tune_shape = "grad-tuned ψ (%s ratio)" % ("max" if _maxi else "min")
+        self.psi = best_psi.detach(); self.tune_gain = float(best_r)
+        self.tune_shape = "grad-tuned ψ (%s %s)" % (self.objective, "ratio" if _ratio else "diff gᵀM_r g−gᵀJJᵀg")
         return self.tune_gain
 
 
 # ===================== model factory =====================
 def build_model(arch, inDim, outDim, P):
-    if arch == "mlp" and P.get("act") in ("bsplinetuned", "bsplinetuned2"):
+    _TUNED_OBJ = {"bsplinetuned": "max", "bsplinetuned2": "min", "bsplinetuned3": "diffmax", "bsplinetuned4": "diffmin"}
+    if arch == "mlp" and P.get("act") in _TUNED_OBJ:
         m = TunedSplineMlpModel(inDim, P["width"], P["depth"], outDim, P["bias"] == "1",
                                 nc=int(P.get("splinenc", 50)), srange=float(P.get("splinerange", 5.0)),
                                 kappa=float(P.get("bsplinekappa", 2.5)),
-                                objective=("min" if P.get("act") == "bsplinetuned2" else "max"))   # fixed ratio-tuned spline (tune() after data ready): bsplinetuned RAISES the ratio, bsplinetuned2 LOWERS it
+                                objective=_TUNED_OBJ[P.get("act")])   # fixed tuned spline: bsplinetuned/2 RAISE/LOWER ratio |gᵀM_rg|/gᵀJJᵀg; bsplinetuned3/4 RAISE/LOWER signed diff gᵀM_rg−gᵀJJᵀg
     elif arch == "mlp" and P.get("act") == "bspline":
         m = SplineMlpModel(inDim, P["width"], P["depth"], outDim, P["bias"] == "1",
                            nc=int(P.get("splinenc", 50)), srange=float(P.get("splinerange", 5.0)))   # learnable KAN-style spline MLP
@@ -5916,26 +5926,27 @@ def run_stream(P):
             if gw8 and not gw8_done and _grokable and isinstance(_TL.model, MlpModel) and (not _gw_fired or (t + ee > steps)):   # activation swap rebuilds the MLP spec ⇒ MLP only
                 saved_model = _TL.model                                           # restore point (bound BEFORE the try)
                 try:
-                    th0g = (gw8init * _th_init0).detach().clone(); acts = ["relu", "gelu", "tanh", "sine", "bspline", "bsplinetuned", "bsplinetuned2"]   # relu→gelu→tanh→sine→LEARNED-spline→RATIO-MAX-spline→RATIO-MIN-spline ladder
+                    th0g = (gw8init * _th_init0).detach().clone()
+                    _tuned_obj = {"bsplinetuned": "max", "bsplinetuned2": "min", "bsplinetuned3": "diffmax", "bsplinetuned4": "diffmin"}
+                    acts = ["relu", "gelu", "tanh", "sine", "bspline", "bsplinetuned", "bsplinetuned2", "bsplinetuned3", "bsplinetuned4"]   # …→LEARNED-spline→RATIO max/min→signed-DIFF max/min
                     base_spec = saved_model.spec; nlayer = len(base_spec); runs = []; _sc = getattr(saved_model, "init_scheme", "default")
                     for ai, an in enumerate(acts):
-                        if an in ("bspline", "bsplinetuned", "bsplinetuned2"):
+                        if an in ("bspline",) or an in _tuned_obj:
                             # bspline = LEARNABLE KAN-style spline (arXiv:2503.10065; ψ trains — escapes simplicity bias).
-                            # bsplinetuned  = FIXED spline TUNED to RAISE  gᵀM_r g/gᵀJJᵀg (ψ NOT in θ ⇒ frozen).
-                            # bsplinetuned2 = FIXED spline TUNED to LOWER  gᵀM_r g/gᵀJJᵀg (the same shape-tuner, minimizing) — the LOW-curvature contrast.
-                            # Both tuned/bspline get their OWN fresh init θ (extra/absent ψ params), scaled by gw8init for the small-init match.
-                            if an in ("bsplinetuned", "bsplinetuned2"):
+                            # bsplinetuned/2  = FIXED spline TUNED to RAISE / LOWER the RATIO |gᵀM_r g|/gᵀJJᵀg (ψ NOT in θ ⇒ frozen).
+                            # bsplinetuned3/4 = FIXED spline TUNED to RAISE / LOWER the SIGNED DIFF gᵀM_r g − gᵀJJᵀg.
+                            # All tuned/bspline get their OWN fresh init θ (extra/absent ψ params), scaled by gw8init for the small-init match.
+                            if an in _tuned_obj:
                                 m2 = TunedSplineMlpModel(inDimE, P["width"], P["depth"], outDimE, P["bias"] == "1",
                                                          nc=int(P.get("splinenc", 50)), srange=float(P.get("splinerange", 5.0)),
-                                                         kappa=float(P.get("bsplinekappa", 2.5)),
-                                                         objective=("min" if an == "bsplinetuned2" else "max"))
+                                                         kappa=float(P.get("bsplinekappa", 2.5)), objective=_tuned_obj[an])
                             else:
                                 m2 = SplineMlpModel(inDimE, P["width"], P["depth"], outDimE, P["bias"] == "1",
                                                     nc=int(P.get("splinenc", 50)), srange=float(P.get("splinerange", 5.0)))
                             m2.init_scheme = _sc; _TL.model = m2
                             th_start = (gw8init * m2.init_theta(P["seed"] + 1, P["init"])).detach().clone()
-                            if an in ("bsplinetuned", "bsplinetuned2"):
-                                try: m2.tune(th_start, Xtr_g, Ytr_g, Ntr_g, outDimE)   # tune the fixed shape on the grok train set (max or min per objective)
+                            if an in _tuned_obj:
+                                try: m2.tune(th_start, Xtr_g, Ytr_g, Ntr_g, outDimE)   # tune the fixed shape on the grok train set (per objective)
                                 except Exception: pass
                             stepf = _gd_step(Xtr_g, Ytr_g, lr)
                         else:
