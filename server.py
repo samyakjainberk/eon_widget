@@ -3204,11 +3204,17 @@ def _block_lanczos_core(hvp, p, b, m, seed, dt=None):
     return T, b, k
 
 
-def slq_density(hvp, p, nprobe, m, ngrid, seed, block=1):
+def slq_density(hvp, p, nprobe, m, ngrid, seed, block=1, nonneg=False):
     """Stochastic Lanczos Quadrature spectral density. block=1 ⇒ standard single-vector SLQ (default);
     block=b>1 ⇒ BLOCK SLQ (b probe columns per block-Lanczos run) — better on clustered/degenerate spectra.
     Quadrature weight per Ritz value = squared norm of the eigenvector's FIRST block (single-component when
-    b=1), normalized so the density integrates to ~1."""
+    b=1), normalized so the density integrates to ~1.
+    nonneg=True ⇒ CLAMP Ritz nodes to ≥0: pass this ONLY for operators KNOWN to be PSD (Gauss-Newton G=JᵀJ,
+    NTK=JJᵀ). Those are rank-deficient (rank ≤ #samples ≪ p) ⇒ a huge zero-eigenspace; Gauss quadrature
+    approximates that delta-at-0 with finite nodes and the lowest node UNDERSHOOTS slightly below 0 (a pure
+    quadrature artifact, present even in float64 — verified min exact-eig ≈ −1e-15 but SLQ node ≈ −0.05·λmax).
+    Clamping to the known non-negativity removes the spurious negative tail. Do NOT set for indefinite
+    operators (loss-Hessian ∇²L=G−M_r, function-Hessian ΣQ_k, residual M_r) whose negatives are REAL."""
     import numpy as np
     TH = []
     W = []
@@ -3232,6 +3238,8 @@ def slq_density(hvp, p, nprobe, m, ngrid, seed, block=1):
                 W.append(float(v0[i] ** 2 / nprobe))
     TH = np.asarray(TH)
     W = np.asarray(W)
+    if nonneg:
+        TH = np.maximum(TH, 0.0)   # KNOWN-PSD operator ⇒ negative Ritz nodes are pure Lanczos-quadrature artifacts
     lo, hi = float(TH.min()), float(TH.max())
     if not hi > lo:
         hi = lo + 1
@@ -3239,6 +3247,8 @@ def slq_density(hvp, p, nprobe, m, ngrid, seed, block=1):
     pad = 0.05 * (hi - lo) + 1e-9
     lo -= pad
     hi += pad
+    if nonneg:
+        lo = 0.0   # PSD ⇒ pin the grid floor to 0 so neither the pad nor the Gaussian-KDE smear of the 0-node spills below 0
     sigma = max((hi - lo) / 60, 1e-9)
     inv = 1.0 / (sigma * math.sqrt(2 * math.pi))
     x = np.linspace(lo, hi, ngrid)
@@ -7204,7 +7214,7 @@ def run_stream(P):
                 yield {
                     "type": "slq", "t": t,
                     "sH": slq_density(lambda v: hvpF(th, X, v), p, nProbe, mSLQ, 80, 0x11, slqBlock),
-                    "sG": slq_density(lambda v: hvpG(th, X, v), p, nProbe, mSLQ, 80, 0x22, slqBlock),
+                    "sG": slq_density(lambda v: hvpG(th, X, v), p, nProbe, mSLQ, 80, 0x22, slqBlock, nonneg=True),   # G=JᵀJ is PSD ⇒ clamp the spurious quadrature negatives
                     "sS": slq_density(lambda v: hvpS(th, X, v, cS), p, nProbe, mSLQ, 80, 0x33, slqBlock),
                     "sHL": slq_density(lambda v: hvpL(th, X, Y, v), p, nProbe, mSLQ, 80, 0x44, slqBlock),
                     # trace of each operator vs iteration (Hutchinson). H is ÷N → per-sample scale (matches §1).

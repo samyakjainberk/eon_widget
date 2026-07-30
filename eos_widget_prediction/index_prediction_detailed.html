@@ -1599,9 +1599,10 @@ function slqScree(d,P){
 // |λ|<1 collapses e.g. the Gauss-Newton spectrum onto y≈0). lt is set adaptively to λ_max·1e-6 per plot.
 function _symlt(ys){const mx=Math.max(...ys.map(v=>Math.abs(v)||0),0);return Math.max(mx*1e-6,1e-30);}
 const _slog=(v,lt)=>Math.sign(v)*Math.log10(1+Math.abs(v)/(lt||1));
-function refreshSLQ(id,d,P){
+function refreshSLQ(id,d,P,nonneg){
   const dim=(P!=null&&P>0)?P:((META&&META.p)||0);
   const s=slqScree(d,dim);
+  if(nonneg){ s.y=s.y.map(v=>v<0?0:v); }   // PSD operator (Gauss-Newton G=JᵀJ): SLQ Gauss-quadrature undershoots the zero-eigenspace ⇒ spurious negatives; G≥0 so clamp them (fixes existing captures too)
   const lg=(document.getElementById('slq4log')||{}).checked!==false;   // log-log by DEFAULT
   let xs=s.x, ys=s.y;
   if(lg){ const lt=_symlt(s.y); xs=s.x.map(v=>v+1); ys=s.y.map(v=>_slog(v,lt)); }   // x: rank+1 (log). y: signed symlog on a LINEAR axis (log baked in ⇒ sign preserved, |λ|<λmax still spread)
@@ -1613,8 +1614,9 @@ function refreshSLQ(id,d,P){
 // ── §5 OVERLAY: the four sorted spectra (H/G/S/∇²L) on ONE axis so they can be compared as they evolve. Same
 //    scree + signed-log transform as refreshSLQ; each operator keeps its OWN λref (from its own λmax). ──
 const _SLQALL={};
-function _slqXY(d,P){
+function _slqXY(d,P,nonneg){
   const dim=(P!=null&&P>0)?P:((META&&META.p)||0), s=slqScree(d,dim);
+  if(nonneg){ s.y=s.y.map(v=>v<0?0:v); }   // PSD (Gauss-Newton): clamp spurious SLQ-quadrature negatives
   const lg=(document.getElementById('slq4log')||{}).checked!==false;
   if(lg){const lt=_symlt(s.y);return {x:s.x.map(v=>v+1),y:s.y.map(v=>_slog(v,lt)),lg};}
   return {x:s.x.slice(),y:s.y.slice(),lg};
@@ -1622,7 +1624,7 @@ function _slqXY(d,P){
 function _renderOverlayInto(plotId,src,P){   // render the 4 sorted spectra of `src` into the 4 traces of plotId
   const g=document.getElementById(plotId); if(!g||!g.data)return;
   const xs=[],ys=[]; let lg=true;
-  for(const k of ['sH','sG','sS','sHL']){const dd=src&&src[k]; if(dd){const r=_slqXY(dd,P);xs.push(r.x);ys.push(r.y);lg=r.lg;}else{xs.push([]);ys.push([]);}}
+  for(const k of ['sH','sG','sS','sHL']){const dd=src&&src[k]; if(dd){const r=_slqXY(dd,P,k==='sG');xs.push(r.x);ys.push(r.y);lg=r.lg;}else{xs.push([]);ys.push([]);}}
   try{Plotly.restyle(plotId,{x:xs,y:ys},[0,1,2,3]);
       Plotly.relayout(plotId,{'xaxis.type':lg?'log':'linear','yaxis.type':'linear',
         'xaxis.title.text':lg?'rank+1 (eigenvalues, high→low)':'rank (eigenvalues, high→low)',
@@ -1640,7 +1642,7 @@ function updateSLQOverlay(src,P){   // §5 live-latest overlay (p_sAll): cache l
 const SLQ4_IDS=['p_slqH4','p_slqG4','p_slqS4','p_slqHL4'], SLQ4_KEYS=['sH','sG','sS','sHL'];
 let SLQ_SNAPS=[], SLQ_RAF=0, SLQ_PENDING=-1, SLQ_CURIDX=0; const SLQ_MAXSNAPS=4000;
 function slqSnapRenderNow(i){const s=SLQ_SNAPS[i];if(!s)return;SLQ_CURIDX=i;
-  for(let k=0;k<4;k++){if(s[SLQ4_KEYS[k]])refreshSLQ(SLQ4_IDS[k],s[SLQ4_KEYS[k]],s.p);}
+  for(let k=0;k<4;k++){if(s[SLQ4_KEYS[k]])refreshSLQ(SLQ4_IDS[k],s[SLQ4_KEYS[k]],s.p,SLQ4_KEYS[k]==='sG');}
   _renderOverlayInto('p_slqAll4',s,s.p);   // §4 overlay: all four at the scrubbed tick
   const sp=document.getElementById('slq4_step');if(sp)sp.textContent=`step ${s.t}  ·  snapshot ${i+1}/${SLQ_SNAPS.length}`;
   const sl=document.getElementById('slq4_slider');if(sl&&+sl.value!==i)sl.value=i;}
@@ -5501,7 +5503,7 @@ async function loop(){                                   // drives ST forward; r
         if(O.s5&&S.eigTick%S.slqStride===0){
           {const bk=S.slqBlock||1;
            const dH=slqDensity(v=>hvpF(S.th,spec,X,N,inDim,p,v,eps),p,S.nProbe,S.mSLQ,80,0x11,bk);refreshSLQ('p_sH',dH,p);   // §5 stays live-latest
-           const dG=slqDensity(v=>hvpG(S.th,spec,X,N,inDim,p,v,eps),p,S.nProbe,S.mSLQ,80,0x22,bk);refreshSLQ('p_sG',dG,p);
+           const dG=slqDensity(v=>hvpG(S.th,spec,X,N,inDim,p,v,eps),p,S.nProbe,S.mSLQ,80,0x22,bk);refreshSLQ('p_sG',dG,p,true);
            const dS=slqDensity(v=>hvpS(S.th,spec,X,N,inDim,p,v,eps,cS),p,S.nProbe,S.mSLQ,80,0x33,bk);refreshSLQ('p_sS',dS,p);
            const dHL=slqDensity(v=>hvpL(S.th,spec,X,Y,N,inDim,p,v,eps),p,S.nProbe,S.mSLQ,80,0x44,bk);refreshSLQ('p_sHL',dHL,p);
            updateSLQOverlay({sH:dH,sG:dG,sS:dS,sHL:dHL},p);   // §5 overlay (all four on one axis)
@@ -6067,7 +6069,7 @@ function gpuHandle(m,st,sp,finish,resuming){
       if(m.sps!=null)sp.textContent=`steps/sec: ${m.sps.toFixed(1)}`;
       st.textContent=`running on ${META.device} … step ${m.t}/${m.steps}  ·  p=${m.p}, 2/lr=${META.thr.toFixed(2)}`;
     }else if(m.type==='slq'){const _sp=(m.p||(META&&META.p)||0);
-      if(m.sH)refreshSLQ('p_sH',m.sH,_sp);if(m.sG)refreshSLQ('p_sG',m.sG,_sp);if(m.sS)refreshSLQ('p_sS',m.sS,_sp);if(m.sHL)refreshSLQ('p_sHL',m.sHL,_sp);   // §5 live-latest
+      if(m.sH)refreshSLQ('p_sH',m.sH,_sp);if(m.sG)refreshSLQ('p_sG',m.sG,_sp,true);if(m.sS)refreshSLQ('p_sS',m.sS,_sp);if(m.sHL)refreshSLQ('p_sHL',m.sHL,_sp);   // §5 live-latest
       updateSLQOverlay(m,_sp);   // §5 overlay (all four on one axis)
       slqSnapPush({t:(m.t!=null?m.t:lastT),sH:m.sH,sG:m.sG,sS:m.sS,sHL:m.sHL,p:_sp});   // §4 scree history (scrubber)
       trPush(m);
