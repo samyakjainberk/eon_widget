@@ -5132,6 +5132,7 @@ def run_stream(P):
     nResid = M                       # §1 residual plot: ALL samples' residual evolution (was capped at 12)
     lr = P["lr"]
     opt = P.get("optimizer", "gd")
+    wd = float(P.get("wd", 0.0))                         # ★ MAIN-RUN weight decay (coupled, matches torch SGD weight_decay): θ←θ−lr(∇L+wd·θ). 0 = off (default). Non-zero DRIVES GROKKING (memorize→generalize).
     s39 = int(P.get("s39", 0))                          # Prediction-6 (Adaptive Optimizers): 4 parallel trajectories, top-50 Gauss-Newton eigenvalues each (scree curve)
     s6f = int(P.get("s6f", 0))                           # §6 FIXED-BASIS panel (off by default): §6 phases along the INIT eigenbasis of M_r & GN, with a FROZEN ranking (init eigenvalues). Shows how each fixed direction is learned.
     s6fk = max(2, min(60, int(P.get("s6fk", 16))))      # §6-fixed-basis: # of top init-directions tracked per operator
@@ -7480,9 +7481,12 @@ def run_stream(P):
         if opt == "gaussnewton":                                   # GN needs the full J and residual r every step (not just ∇L)
             _Jg, _of = jac_cols(th, X); _M = N * outD
             _rr = (-N * _TL.loss.resid_cotangent(_of.reshape(N, outD), Y, N)).reshape(-1)
-            th = th - lr * _opt_dir(_TL.model, None, opt, _Jg[:_M], _rr[:_M], N=N, outD=outD, out=_of)   # CE+gaussnewton ⇒ natural-gradient step (out=_of gives p_i); MSE unchanged
+            _step = _opt_dir(_TL.model, None, opt, _Jg[:_M], _rr[:_M], N=N, outD=outD, out=_of)   # CE+gaussnewton ⇒ natural-gradient step (out=_of gives p_i); MSE unchanged
         else:
-            th = th - lr * _opt_dir(_TL.model, gradL(th, X, Y)[0], opt)
+            _step = _opt_dir(_TL.model, gradL(th, X, Y)[0], opt)
+        if wd > 0.0:
+            _step = _step + wd * th                                # ★ coupled weight decay (matches torch SGD weight_decay) — essential for grokking
+        th = th - lr * _step
 
     if sec27_state is not None and sec27_state.n_seen > 0:         # §27 end-of-run flush: the trailing 50 iterations (right-clipped windows)
         _f27 = sec27_state.flush()
@@ -7976,9 +7980,12 @@ def run_surrogate_compare(P):
         if opt == "gaussnewton":                                   # GN needs the full J and residual r every step (not just ∇L)
             _Jg, _of = jac_cols(th, X); _M = N * outD
             _rr = (-N * _TL.loss.resid_cotangent(_of.reshape(N, outD), Y, N)).reshape(-1)
-            th = th - lr * _opt_dir(_TL.model, None, opt, _Jg[:_M], _rr[:_M], N=N, outD=outD, out=_of)   # CE+gaussnewton ⇒ natural-gradient step (out=_of gives p_i); MSE unchanged
+            _step = _opt_dir(_TL.model, None, opt, _Jg[:_M], _rr[:_M], N=N, outD=outD, out=_of)   # CE+gaussnewton ⇒ natural-gradient step (out=_of gives p_i); MSE unchanged
         else:
-            th = th - lr * _opt_dir(_TL.model, gradL(th, X, Y)[0], opt)   # actual trajectory uses the chosen optimizer
+            _step = _opt_dir(_TL.model, gradL(th, X, Y)[0], opt)
+        if wd > 0.0:
+            _step = _step + wd * th                                # ★ coupled weight decay (matches torch SGD weight_decay) — essential for grokking
+        th = th - lr * _step   # actual trajectory uses the chosen optimizer
         if th0 is not None:
             dths = th_sur - th0
             if kind == "quad":
@@ -8021,7 +8028,7 @@ def _parse_params(q):
         "slqprobes": fi("slqprobes", 4), "slqblock": max(1, fi("slqblock", 4)),   # slqblock: SLQ block size (DEFAULT 4 = block SLQ, validated sweet spot; 1 = standard single-vector SLQ)
         "energyp": ff("energyp", 99),
         "seed": fi("seed", 0), "start": fi("start", 0), "inputstd": ff("inputstd", 1.0),
-        "ssign": g("ssign", "off"), "optimizer": g("optimizer", "gd"), "qapprox": max(1, fi("qapprox", 25)),
+        "ssign": g("ssign", "off"), "optimizer": g("optimizer", "gd"), "wd": ff("wd", 0.0), "qapprox": max(1, fi("qapprox", 25)),
         "qmode": max(1, fi("qmode", 1)), "tset": max(1, fi("tset", 3)),
         # qinit: GLOBAL function-Hessian-Q toggle for the prediction trackers (see _qcfg_setup / jac_hvp).
         "qinit": g("qinit", "evolve"),          # evolve | fix | gauss | bern | unif

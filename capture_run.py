@@ -101,6 +101,14 @@ def coerce_overrides(args, extra_sets):
             raise SystemExit("--set expects key=value, got: %r" % kv)
         k, v = kv.split("=", 1)
         p[k.strip()] = v.strip()
+    # ★ grok config inherits the MAIN-run config unless EXPLICITLY overridden — fixes the main-vs-grok
+    #   discrepancy: the grok sub-runs (⑤–⑩) train on gw_nsamp / gw_batch / gw_steps, which defaulted to
+    #   500 / 0 / 600 regardless of the main run's nsamp / batch / steps. (gwNinit & gwdiaginit already
+    #   default to 1.0 ⇒ main-run init, and the grok runs already use the main lr, so those already match.)
+    set_keys = {kv.split("=", 1)[0].strip() for kv in extra_sets if "=" in kv}
+    for gwk, maink in [("gw_nsamp", "nsamp"), ("gw_batch", "batch"), ("gw_steps", "steps")]:
+        if gwk not in set_keys and maink in p:
+            p[gwk] = str(p[maink])
     return p
 
 
