@@ -3147,10 +3147,11 @@ def _lanczos_core(hvp, p, m, seed, dt=None, q0=None):
     be = []
     qp = torch.zeros(p, dtype=dt, device=_dev())
     beta = torch.zeros((), dtype=dt, device=_dev())
+    wmax = 0.0                                      # running max of ‖A·q‖ ≈ ‖A‖ (~λmax); the scale-stable breakdown denominator
     for _ in range(min(p, m)):
         Q.append(q)
         w = hvp(q)
-        wscale = float(w.norm())                    # ‖A·q‖ — scale for the RELATIVE breakdown test (rank-deficient ops)
+        wscale = float(w.norm()); wmax = max(wmax, wscale)   # ‖A·q‖ THIS step; wmax = operator norm across the run
         a = (w @ q)
         al.append(float(a))
         w = w - a * q - beta * qp
@@ -3159,8 +3160,10 @@ def _lanczos_core(hvp, p, m, seed, dt=None, q0=None):
             w = w - Qm.t() @ (Qm @ w)
         beta = w.norm()
         be.append(float(beta))
-        if float(beta) < 1e-7 * wscale + 1e-30:     # ★ breakdown (rank-deficient op ⇒ residual is roundoff): FREEZE, do
-            #   NOT break. Breaking returns k < m Ritz values, and a consumer that indexes a FIXED top-K (e.g. §12 per-
+        if float(beta) < 1e-7 * wmax + 1e-30:       # ★ breakdown (rank-deficient op ⇒ residual is roundoff): FREEZE, do
+            #   NOT break. DENOMINATOR = wmax (running max), NOT wscale: once q enters the null space ‖A·q‖ collapses to
+            #   roundoff, so β/wscale (roundoff÷roundoff) never dips below 1e-7 and the freeze misses ⇒ blow-up. wmax≈‖A‖.
+            #   Breaking returns k < m Ritz values, and a consumer that indexes a FIXED top-K (e.g. §12 per-
             #   sample eigvecs, gw diagnostics) then reads out of bounds ⇒ a CUDA device-side assert that poisons the
             #   context and crashes the whole run. Freezing (q←0, β←0) keeps iterating to m so k==m ALWAYS; the frozen
             #   steps contribute 0 eigenvalues (spurious, sort to the bottom, excluded downstream) and add no roundoff
@@ -3293,10 +3296,12 @@ def _block_lanczos_core(hvp, p, b, m, seed, dt=None):
     Qblocks = []; A = []; B = []
     Qprev = torch.zeros(p, b, dtype=dt, device=_dev())
     Bprev = torch.zeros(b, b, dtype=dt, device=_dev())
+    wmax = 0.0                                                      # RUNNING MAX of the operator-application scale ≈ ‖A‖ (~λmax); the breakdown denominator
     for _ in range(min(max(1, p // b), m)):
         Qblocks.append(Qj)
         W = torch.stack([hvp(Qj[:, c]) for c in range(b)], dim=1)   # (p×b) = A·Q_j (b single-vector HVPs)
-        wscale = float(W.abs().max())                               # scale of the operator application (for the RELATIVE breakdown test)
+        wscale = float(W.abs().max())                               # scale of THIS application; wmax tracks the operator norm across the whole run
+        wmax = max(wmax, wscale)
         Aj = Qj.t() @ W
         Aj = 0.5 * (Aj + Aj.t())                                     # symmetrize the diagonal block
         A.append(Aj)
@@ -3309,7 +3314,11 @@ def _block_lanczos_core(hvp, p, b, m, seed, dt=None):
         #   absolute guard (‖Bj‖<1e-10) never fired, so QR renormalized that roundoff back to a UNIT block and the
         #   three-term recurrence re-amplified it every step ⇒ spurious eigenvalues ±1e5+ (exact max ~70) that survived
         #   the nonneg clamp (only the negatives are clamped). Break when the residual is negligible vs the op scale.
-        if float(W.abs().max()) < 1e-7 * wscale + 1e-30:             # ★ breakdown ⇒ FREEZE (do NOT break, mirrors _lanczos_core's
+        #   ★★ DENOMINATOR = wmax (running-max), NOT the current wscale: when Q_j drifts into the null space the
+        #   INSTANTANEOUS wscale collapses to roundoff (~1e-5), so W/wscale (roundoff÷roundoff) stays O(1e-3) and the
+        #   freeze NEVER fires ⇒ QR renormalizes the roundoff and the recurrence blows up to 1e25 (float32 GN on a
+        #   low-effective-rank 1-D task like chebyshev). Comparing to wmax≈‖A‖=λmax makes the test scale-stable.
+        if float(W.abs().max()) < 1e-7 * wmax + 1e-30:               # ★ breakdown ⇒ FREEZE (do NOT break, mirrors _lanczos_core's
             #   freeze): breaking returns k < m blocks, so a consumer that indexes a FIXED number of block-Ritz values
             #   reads out of bounds ⇒ CUDA device-side assert. Append a ZERO off-diagonal block and a ZERO probe block
             #   and keep iterating to m so k==m ALWAYS; the frozen blocks contribute 0 eigenvalues (spurious, tiny
