@@ -863,7 +863,7 @@ Each line “$i\!\cdot\!j$” is $\cos\angle(\text{vector }i,\text{vector }j)\in
 
 <div id="sec_gw11" style="border:2px solid #6d28d9;border-radius:8px;padding:6px 14px 12px;margin:6px 0 18px;background:#f5f3ff;display:none">
 <h2 style="color:#6d28d9;margin-top:4px">★grok-⑪ · Loss-function sweep <span id="gw11_cap" style="font-size:12px;color:#6b7280;font-weight:400"></span></h2>
-<p class="cap">The <b>same three panels</b> as grok-⑤–⑨, but the sweep axis is the <b>loss function</b> — from one init, one run per loss, trained with the <b>main run's lr + weight decay</b> (so only the loss changes). Colour = regime by the ratio $\ell''/\ell'$: <b style="color:#1e3a8a">erf-integral</b> · <b style="color:#2563eb">log-cosh</b> · <b style="color:#60a5fa">pseudo-Huber</b> (shades of <b>blue = rich/feature</b>, $\ell''$ decays faster than $\ell'$) · <b style="color:#dc2626">e<sup>r²</sup>−1</b> (growth, $\ell''>0$) · <b style="color:#f87171">Welsch 1−e<sup>−r²</sup></b> · <b style="color:#991b1b">1−e<sup>−r⁴</sup></b> (redescending, $\ell''<0$ tail) — <b>shades of red = lazy/kernel</b> ($\ell''/\ell'\!\to\infty$) · <b style="color:#000">MSE</b> (black, reference) · <b style="color:#9ca3af">CE</b> (grey, binary-logistic). The <b>ratio panel is loss-consistent</b>: $\rho=|g^\top M g|/|g^\top G g|$ with $M=\sum_k\ell'_k Q_k$, $G=J^\top\mathrm{diag}(\ell'')J$, $g=\sum_k\ell'_k\nabla f_k$ (reduces to the usual $|g^\top M_r g|/g^\top J^\top J g$ for MSE). <b>Panel 1</b> = test/train loss &amp; accuracy; <b>Panel 2</b> = ratio / signed 2nd−1st curvature diff / PS / alignment; <b>Panel 3</b> = residual↔NTK eigenvector pairs. Fires once when enabled. init σ <input id="gw11init" value="1" style="width:34px"> (θ=σ·θ₀).</p>
+<p class="cap">The <b>same three panels</b> as grok-⑤–⑨, but the sweep axis is the <b>loss function</b> — from one init, one run per loss, trained with the <b>main run's lr + weight decay</b> (so only the loss changes). Colour = regime by the ratio $\ell''/\ell'$: <b style="color:#1e3a8a">erf-integral</b> · <b style="color:#2563eb">log-cosh</b> · <b style="color:#60a5fa">pseudo-Huber</b> (shades of <b>blue = rich/feature</b>, $\ell''$ decays faster than $\ell'$) · <b style="color:#dc2626">e<sup>r²</sup>−1</b> (growth, $\ell''>0$) · <b style="color:#f87171">Welsch 1−e<sup>−r²</sup></b> · <b style="color:#991b1b">1−e<sup>−r⁴</sup></b> (redescending, $\ell''<0$ tail) — <b>shades of red = lazy/kernel</b> ($\ell''/\ell'\!\to\infty$) · <b style="color:#000">MSE</b> (black, reference) · <b style="color:#9ca3af">CE</b> (grey, binary-logistic). The <b>ratio panel is loss-consistent</b>: $\rho=|g^\top M g|/|g^\top G g|$ with $M=\sum_k\ell'_k Q_k$, $G=J^\top\mathrm{diag}(\ell'')J$, $g=\sum_k\ell'_k\nabla f_k$ (reduces to the usual $|g^\top M_r g|/g^\top J^\top J g$ for MSE). <b>Panel 1</b> = test/train loss &amp; accuracy; <b>Panel 2</b> = ratio / signed 2nd−1st curvature diff / PS / alignment; <b>Panel 3</b> = residual↔NTK eigenvector pairs. Fires once when enabled. init σ <input id="gw11init" value="1" style="width:34px"> (θ=σ·θ₀). &nbsp;<label style="font-weight:600;color:#6d28d9"><input type="checkbox" id="gw11overlay" onchange="if(_GW11_LAST)grokRenderExp('gw11',_GW11_LAST,false)"> overlay train/test</label> <span style="color:#94a3b8;font-size:11px">(train solid + test dotted on the loss/acc plots — the gap = memorization)</span></p>
 <div class="plotrow row4"><div id="p_gw11_lte" class="plot" style="height:250px"></div><div id="p_gw11_ltr" class="plot" style="height:250px"></div><div id="p_gw11_ate" class="plot" style="height:250px"></div><div id="p_gw11_atr" class="plot" style="height:250px"></div></div>
 <div class="plotrow row4"><div id="p_gw11_ratio" class="plot" style="height:250px"></div><div id="p_gw11_mrgn" class="plot" style="height:250px"></div><div id="p_gw11_ps" class="plot" style="height:250px"></div><div id="p_gw11_align" class="plot" style="height:250px"></div></div><h3 style="margin:8px 0 2px;font-size:13px;color:#475569">Panel 3 — residual ↔ NTK eigenvector PAIRS: |P<sub>span(u₂,u₃)</sub>r|/‖r‖ · (u₄,u₅) · (u₆,u₇) · (u₈,u₉)</h3><div class="plotrow row4"><div id="p_gw11_jr23" class="plot" style="height:250px"></div><div id="p_gw11_jr45" class="plot" style="height:250px"></div><div id="p_gw11_jr67" class="plot" style="height:250px"></div><div id="p_gw11_jr89" class="plot" style="height:250px"></div></div>
 </div>
@@ -3985,6 +3985,7 @@ function _commonLegend(pfx,series,header,plots,tracesFor){
     const cap=sec.querySelector('p.cap'); if(cap&&cap.parentNode)cap.parentNode.insertBefore(leg,cap.nextSibling); else sec.insertBefore(leg,sec.firstChild.nextSibling);}
   _buildLegend(leg,pfx,series,header,plots,tracesFor);
 }
+var _GW11_LAST=null;   // ★grok-⑪ last payload — lets the 'overlay train/test' toggle redraw without new data
 function grokRenderExp(pfx,data,isCE){
   if(!data||!data.runs||!data.runs.length)return; const R=data.runs; const cols=_gwColors(R.length);
   const lab=r=>r.name!==undefined?r.name:(''+(Math.round(r.x*1000)/1000));
@@ -4005,6 +4006,19 @@ function grokRenderExp(pfx,data,isCE){
   P('ltr','ltr','train loss vs iter','train loss');
   P('ate','ate','test accuracy vs iter','test acc',[0,1.02]);
   P('atr','atr','train accuracy vs iter','train acc',[0,1.02]);
+  // ★grok-⑪ OVERLAY: when the 'overlay train/test' toggle is on, redraw the train plots (ltr/atr) as train(—)+test(··)
+  //   on ONE axis per loss, so the memorization gap (train fits, test lags) is visible directly. lte/ate stay test-only.
+  if(pfx==='gw11'){_GW11_LAST=data;
+    const _ov=document.getElementById('gw11overlay');
+    if(_ov&&_ov.checked){
+      const ovTr=(ktr,kte)=>{const t=[];R.forEach((r,i)=>{const c=(r.color||cols[i]),v=(_lv[i]===false?'legendonly':true);
+        t.push({x:r.it,y:r[ktr],mode:'lines',name:lab(r)+' train',line:{color:c,width:2},connectgaps:false,visible:v});
+        t.push({x:r.it,y:r[kte],mode:'lines',name:lab(r)+' test',line:{color:c,width:1.6,dash:'dot'},connectgaps:false,visible:v});});return t;};
+      const ovP=(id,ktr,kte,title,yl,yr)=>{try{const L=_gwExpLayout(title+tsuf,yl,false,yr);L.showlegend=false;L.margin=Object.assign({},L.margin,{b:34});Plotly.react('p_gw11_'+id,ovTr(ktr,kte),L);}catch(e){}};
+      ovP('ltr','ltr','lte','loss · train(—) vs test(··) — gap = memorization','loss');
+      ovP('atr','atr','ate','accuracy · train(—) vs test(··) — gap = memorization','acc',[0,1.02]);
+    }
+  }
   // Row 2 — mechanistic causal chain: ratio, signed 2nd−1st curvature difference, PS, alignment
   P('ratio','ratio','ratio |gᵀM_rg|/|gᵀJJᵀg| vs iter','ratio');
   // mrgn = gᵀM_r g − gᵀJJᵀg (g=Jᵀr, r=Y−f): SIGNED-LOG y — grok-⑦ runs sharpen hugely (|·| from ~1e3 to ~1e27), so a
@@ -4755,10 +4769,10 @@ function pushPoint(t,D,n,kth,nResid){
   {   // ★ prediction demo panel — render from the step payload, independent of the section toggles
     const _si=Math.max(0,parseInt((document.getElementById('stat_init')||{}).value)||0), _pg=(t>=_si);   // 5.2 forecasts begin only AFTER stat_init; the actual σ₁/λmax curves are shown throughout
     const aN=(D.thA&&D.thA[1]!=null)?D.thA[1]:null, sh=(D.thAH==null?null:D.thAH);
-    if(D.thP){const pv=_pg?D.thP[1]:null,pp=(_pg&&D.thPpsd)?D.thPpsd[1]:null;if(pv!=null||pp!=null||sh!=null||aN!=null)extP('p_pd1',{x:[[t],[t],[t],[t]],y:[[pv],[pp],[sh],[aN]]},[0,1,2,3]);}
-    if(D.thP_d){const pv=_pg?D.thP_d[1]:null,pp=(_pg&&D.thPpsd_d)?D.thPpsd_d[1]:null;if(pv!=null||pp!=null||sh!=null||aN!=null)extP('p_pd2',{x:[[t],[t],[t],[t]],y:[[pv],[pp],[sh],[aN]]},[0,1,2,3]);}
+    if(D.thP){const pv=_pg?(D.thP[1]!=null?D.thP[1]:D.thP[0]):null,pp=(_pg&&D.thPpsd)?(D.thPpsd[1]!=null?D.thPpsd[1]:D.thPpsd[0]):null;if(pv!=null||pp!=null||sh!=null||aN!=null)extP('p_pd1',{x:[[t],[t],[t],[t]],y:[[pv],[pp],[sh],[aN]]},[0,1,2,3]);}
+    if(D.thP_d){const pv=_pg?(D.thP_d[1]!=null?D.thP_d[1]:D.thP_d[0]):null,pp=(_pg&&D.thPpsd_d)?(D.thPpsd_d[1]!=null?D.thPpsd_d[1]:D.thPpsd_d[0]):null;if(pv!=null||pp!=null||sh!=null||aN!=null)extP('p_pd2',{x:[[t],[t],[t],[t]],y:[[pv],[pp],[sh],[aN]]},[0,1,2,3]);}
     const cN=(D.cActN==null?null:D.cActN),cH=(D.cActH==null?null:D.cActH);
-    const c51=_pg?D.c51:null,c51p=_pg?D.c51p:null,c51d=_pg?D.c51d:null,c51dp=_pg?D.c51dp:null;
+    const c51=_pg?(D.c51!=null?D.c51:D.c47):null,c51p=_pg?(D.c51p!=null?D.c51p:D.c47p):null,c51d=_pg?(D.c51d!=null?D.c51d:D.c47d):null,c51dp=_pg?(D.c51dp!=null?D.c51dp:D.c47dp):null;
     if(c51!=null||c51p!=null||cN!=null||cH!=null)extP('p_pd3',{x:[[t],[t],[t],[t]],y:[[c51],[c51p],[cH],[cN]]},[0,1,2,3]);   // trace2(red dash)=∇²L, trace3(orange dot)=NTK — consistent with p_pd1/2
     if(c51d!=null||c51dp!=null||cN!=null||cH!=null)extP('p_pd4',{x:[[t],[t],[t],[t]],y:[[c51d],[c51dp],[cH],[cN]]},[0,1,2,3]);
   }
