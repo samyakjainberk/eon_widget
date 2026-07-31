@@ -5373,6 +5373,7 @@ function currentQueryParams(){   // the exact query-style param dict the backend
   {const e=document.getElementById('ssk');if(e)o['ssk']=e.value||'5';}   // self-stabilization: # top/bottom eigenvectors of the preconditioned Hessian H_P
   o['qspec']=chk('enQspec')?'1':'0';   // Q eigenspectrum (not a prediction): per-iteration Q_r + H eigenspectra, computed ONLY when enabled (two Lanczos per step)
   o['s6f']=chk('enS6f')?'1':'0'; o['s6fk']=(document.getElementById('s6fk')||{}).value||'16';   // §6 fixed-basis (not a prediction): §6 phases along the frozen init eigenbasis of M_r & GN
+  o['sinit']=chk('enSinit')?'1':'0'; o['sinitk']=(document.getElementById('sinitk')||{}).value||'40';   // §7 (prediction_standardinit): section-6 panels on the FROZEN t=0 ranking + running-max — GPU-backend query path (was omitted ⇒ §7 never computed ⇒ empty panels)
   {const e=document.getElementById('qspeck');if(e)o['qspeck']=e.value||'40';}   // Q-spectrum: # top ⊕ bottom eigenvalues per iteration
 
   {const e=document.getElementById('prthr');if(e)o['prthr']=e.value||'0.9';}   // ray anchor cos threshold
