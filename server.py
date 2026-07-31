@@ -1577,6 +1577,77 @@ class CELoss:
         return (p * Jv - p * (p * Jv).sum(dim=-1, keepdim=True)) / self._tokens(out, N)
 
 
+# ===================== ★grok-⑪ loss-function sweep — feature-vs-kernel losses =====================
+# Six per-sample losses written on the residual r = f−y (elementwise), each exposing the SAME interface as
+# MSELoss/CELoss (value, resid_cotangent = ∂L/∂f = ℓ′/tokens) PLUS out_hess_diag = ℓ″(r) (the DIAGONAL output
+# Hessian A_k) so the grok diagnostics can form the LOSS-CONSISTENT Gauss-Newton weight gᵀJᵀdiag(ℓ″)Jg.
+# The regime is set by ℓ″/ℓ′: →0 ⇒ feature/rich (blue), →∞ ⇒ kernel/lazy (red). MSE is the reference (black),
+# binary-logistic CE (grey) is scalar so its output Hessian is diagonal too.
+class _ElemLoss:
+    """Elementwise residual loss ℓ(r), r = f−y. Subclasses set _l, _d1(=ℓ′), _d2(=ℓ″)."""
+    def _tokens(self, out, N): return N * out.shape[1] if out.dim() == 3 else N
+    def _target(self, out, Y):
+        if Y.dtype == torch.long: return torch.zeros_like(out).scatter_(-1, Y.unsqueeze(-1), 1.0)
+        return Y
+    def value(self, out, Y, N):
+        r = out - self._target(out, Y); return self._l(r).sum() / self._tokens(out, N)
+    def resid_cotangent(self, out, Y, N):                 # ∂L/∂f = ℓ′(r)/tokens
+        r = out - self._target(out, Y); return self._d1(r) / self._tokens(out, N)
+    def gn_apply(self, out, Jv, N):                       # interface stub (grok uses out_hess_diag; never called here)
+        return Jv / self._tokens(out, N)
+    def out_hess_diag(self, out, Y):                      # ℓ″(r) per element — the diagonal output Hessian A_k
+        r = out - self._target(out, Y); return self._d2(r)
+
+class LogCoshLoss(_ElemLoss):        # ℓ″=sech²r → 0 exponentially, ℓ′=tanh r → ±1  ⇒ FEATURE/rich
+    name = "logcosh"
+    def _l(self, r): return torch.log(torch.cosh(r))
+    def _d1(self, r): return torch.tanh(r)
+    def _d2(self, r): return 1.0 - torch.tanh(r) ** 2
+class ErfIntLoss(_ElemLoss):         # ℓ″=(2/√π)e^{−r²} → 0 Gaussian-fast, ℓ′=erf r → ±1  ⇒ FEATURE (most rich)
+    name = "erfint"
+    _SP = math.sqrt(math.pi)
+    def _l(self, r): return r * torch.erf(r) + (torch.exp(-r * r) - 1.0) / self._SP
+    def _d1(self, r): return torch.erf(r)
+    def _d2(self, r): return (2.0 / self._SP) * torch.exp(-r * r)
+class PseudoHuberLoss(_ElemLoss):    # ℓ″=(1+r²)^{−3/2} → 0 (∼r⁻³), ℓ′=r/√(1+r²) → ±1  ⇒ FEATURE (least rich)
+    name = "pseudohuber"
+    def _l(self, r): return torch.sqrt(1.0 + r * r) - 1.0
+    def _d1(self, r): return r / torch.sqrt(1.0 + r * r)
+    def _d2(self, r): return (1.0 + r * r) ** (-1.5)
+class ExpSqLoss(_ElemLoss):          # ℓ″=2(1+2r²)e^{r²} → ∞ super-exp, ℓ″/ℓ′∼2r → ∞  ⇒ KERNEL/lazy
+    name = "expr2"
+    # clamp the residual to ±4.5 (e^{20}≈5e8) BEFORE exp so fp32 never overflows to NaN — genuine e^{r²} inside
+    # |r|≤4.5 (the whole rich↔lazy story lives there for ±1 targets); the clamp only tames transient blow-ups.
+    def _rc(self, r): return r.clamp(-4.5, 4.5)
+    def _l(self, r): rc = self._rc(r); return torch.exp(rc * rc) - 1.0
+    def _d1(self, r): rc = self._rc(r); return 2.0 * rc * torch.exp(rc * rc)
+    def _d2(self, r): rc = self._rc(r); return 2.0 * (1.0 + 2.0 * rc * rc) * torch.exp(rc * rc)
+
+class BinLogisticLoss:               # binary-logistic CE on the scalar logit z=f; target ỹ=sign(y)∈{±1}  ⇒ reference (grey)
+    name = "bce"
+    def _tokens(self, out, N): return N * out.shape[1] if out.dim() == 3 else N
+    def _yt(self, out, Y): return torch.sign(Y.to(out.dtype)) if Y.dtype != torch.long else (2.0 * Y.to(out.dtype) - 1.0)
+    def value(self, out, Y, N):
+        yt = self._yt(out, Y); return torch.nn.functional.softplus(-out * yt).sum() / self._tokens(out, N)
+    def resid_cotangent(self, out, Y, N):                # ∂L/∂z = −ỹ·σ(−zỹ) / tokens
+        yt = self._yt(out, Y); return (-yt * torch.sigmoid(-out * yt)) / self._tokens(out, N)
+    def gn_apply(self, out, Jv, N):                      # interface stub (grok uses out_hess_diag)
+        s = torch.sigmoid(out); return (s * (1.0 - s)) * Jv / self._tokens(out, N)
+    def out_hess_diag(self, out, Y):                     # ℓ″=σ(z)(1−σ(z)) (target-independent since ỹ²=1)
+        s = torch.sigmoid(out); return s * (1.0 - s)
+
+# (name, loss-instance, colour) — colour codes the regime: blue shades = rich (ℓ″ decays faster than ℓ′),
+# red = lazy (ℓ″ decays slower), black = MSE reference, grey = CE. Blues ordered by richness (erf > log-cosh > pseudo-Huber).
+GW11_LOSSES = [
+    ("erf-integral", ErfIntLoss(),      "#1e3a8a"),   # dark blue  (Gaussian ℓ″ decay — most rich)
+    ("log-cosh",     LogCoshLoss(),     "#2563eb"),   # blue       (exponential ℓ″ decay)
+    ("pseudo-Huber", PseudoHuberLoss(), "#60a5fa"),   # light blue (polynomial ℓ″ decay — least rich)
+    ("e^{r²}−1",     ExpSqLoss(),       "#dc2626"),   # red        (super-exp ℓ″ growth — lazy)
+    ("MSE",          MSELoss(),         "#000000"),   # black      (reference)
+    ("CE (logistic)", BinLogisticLoss(), "#9ca3af"),  # grey       (binary cross-entropy)
+]
+
+
 def build_loss(name):
     return CELoss() if name == "ce" else MSELoss()
 
@@ -4330,11 +4401,15 @@ def _grok_diag(th, X, Y, Xte, Yte, N, Nte, outD, ce, psm=20):
         # residual / Jacobian geometry (mirrors run_stream's generic residual rr = onehot−softmax / Y−f)
         rr = (-N * _TL.loss.resid_cotangent(o, Y, N)).reshape(-1)
         r = rr[:M]; rc = r.reshape(N, outD); rn = float(r.norm()) + 1e-30
+        # ★ LOSS-CONSISTENT Gauss-Newton weight: gᵀ Jᵀdiag(ℓ″)J g = Σ_k ℓ″_k (Jg)_k². out_hess_diag = ℓ″(r)
+        #   exists only on the grok-⑪ losses; MSE/CE fall back to ℓ″=1 ⇒ the plain ‖Jg‖² (unchanged for gw5-10).
+        _l2fn = getattr(_TL.loss, "out_hess_diag", None)
+        l2 = _l2fn(o, Y).reshape(-1)[:M] if _l2fn is not None else None
         if isinstance(_TL.model, MlpModel):
             # MLP: jac_cols is ONE batched backward (fast + EXACT even at large M) ⇒ use it.
             Jm = jac_cols(th, X)[0][:M]
             g = Jm.t() @ r                                        # Jᵀr
-            gJJg = float((Jm @ g).pow(2).sum())                  # ‖J g‖²
+            _Jg = Jm @ g; gJJg = float((_Jg.pow(2) if l2 is None else l2 * _Jg.pow(2)).sum())   # gᵀJᵀdiag(ℓ″)Jg
             u1 = r / rn                                           # top NTK eigvec via power iteration on Jm(Jmᵀ·)
             for _ in range(30):
                 u1 = Jm @ (Jm.t() @ u1); nu = float(u1.norm())
@@ -4347,7 +4422,7 @@ def _grok_diag(th, X, Y, Xte, Yte, N, Nte, outD, ce, psm=20):
             def _jvp(v):
                 fp = _TL.model.forward(th + EPS * v, X); fm = _TL.model.forward(th - EPS * v, X)
                 return ((fp - fm) / (2.0 * EPS)).reshape(-1)[:M]  # J·v (M,)
-            gJJg = float((_jvp(g) ** 2).sum())
+            _Jg = _jvp(g); gJJg = float((_Jg ** 2 if l2 is None else l2 * _Jg ** 2).sum())   # gᵀJᵀdiag(ℓ″)Jg
             u1 = r / rn
             for _ in range(30):
                 w = _TL.model.vjp(th, X, u1.reshape(N, outD))[0]
@@ -5067,6 +5142,8 @@ def run_stream(P):
     gw10 = int(P.get("gw10", 0))                 # ★grok-⑩ subspace-traversal random-search: top/bottom/null/random-K dirs of Qr, step maximizes rᵀf (no gradient) — for k∈{1,3,5}
     gw10try = max(1, int(P.get("gw10try", 16)))  # ★grok-⑩ # random directions sampled per step within the K-dim subspace
     gw10init = float(P.get("gw10init", 1.0))     # ★grok-⑩ init-scale θ=gw10init·θ₀ (default 1 = main run's init)
+    gw11 = int(P.get("gw11", 0))                 # ★grok-⑪ LOSS-FUNCTION sweep: log-cosh/erf-int/pseudo-Huber (rich·blue) · e^{r²}−1 (lazy·red) · MSE (black) · CE (grey); loss-consistent ratio
+    gw11init = float(P.get("gw11init", 1.0))     # ★grok-⑪ init-scale θ=gw11init·θ₀ (default 1 = main run's init)
     gwdiaginit = float(P.get("gwdiaginit", 1.0))                     # 1 ⇒ grok runs use the MAIN run's init (default; tie to main run)
     gw_n = max(3, int(P.get("gw_n", 6)))         # shared: # of sweep points (⑤⑥⑦)
     gw_steps = max(600, int(P.get("gw_steps", 600)))   # ★ ALL grok/Panel-0 runs train ≥600 iterations, always   # shared: # GD steps per short run
@@ -5228,7 +5305,7 @@ def run_stream(P):
     gw4h_refs = {}                          # ★grok-④ (H version): same, but for the UNWEIGHTED function Hessian H=Σ_i Q_i
     gwdiag_th = None                        # ★grok-②③④: small-init SHADOW trajectory (gwdiaginit·θ₀, plain GD) the diagnostics analyze (gwdiaginit=1 ⇒ main run)
     gw1_done = False                        # ★grok-①: one-shot init-scale sweep guard
-    gw5_done = gw6_done = gw7_done = gw8_done = gw9_done = gw10_done = gw3p0_done = False   # ★grok-⑤⑥⑦⑧⑨⑩ + ③Panel-0: completion guards
+    gw5_done = gw6_done = gw7_done = gw8_done = gw9_done = gw10_done = gw11_done = gw3p0_done = False   # ★grok-⑤⑥⑦⑧⑨⑩⑪ + ③Panel-0: completion guards
     gw5_started = gw6_started = gw7_started = gw9_started = gw10_started = gw3p0_started = False   # ★concurrency: streaming groks are SET UP once (guard) then advanced one tick per main diagnostic tick — main + groks train SIMULTANEOUSLY (fine-interleave, single GPU, lockstep)
     _gw_drivers = {}                         # ★concurrency: which -> (_stream_runs generator, finalize_fn). Advanced ONE tick per main diagnostic tick; on completion emits a terminal "gwfinal" record (kept by the offline capture, unlike the transient "gwstream" partials)
     eds_hist = []              # EARLY-DYNAMICS (s42): rolling buffer of the last ~11 ticks' {t, h, mr} top-K eigenspaces, for the mean principal angle at lags {1,2,5,10}
@@ -6022,7 +6099,7 @@ def run_stream(P):
             #   test/train loss+acc (grokking), ratio |gᵀM_rg|/|gᵀJJᵀg|, PS λ_max(∇²L), J↔r alignment.
             _grokable = (dataset != "owt")   # interventions gw5/6/7/9 are model-agnostic (own data + generic gradL/hvpS/jac_cols); gw8 (activation swap) additionally needs an MLP — gated below
             Xtr_g = Ytr_g = Xte_g = Yte_g = None; Ntr_g = Nte_g = 0
-            if (gw5 or gw6 or gw7 or gw8 or gw9 or gw10) and _grokable and (not (gw5_done and gw6_done and gw7_done and gw8_done and gw9_done and gw10_done)):
+            if (gw5 or gw6 or gw7 or gw8 or gw9 or gw10 or gw11) and _grokable and (not (gw5_done and gw6_done and gw7_done and gw8_done and gw9_done and gw10_done and gw11_done)):
                 try:
                     # grok-⑤–⑩ build their OWN larger TRAIN (gw_nsamp) + held-out TEST set. _heldout_testset GUARANTEES
                     # the test is disjoint from THIS train (gw_nsamp) with the same DGP (chebyshev→train-grid midpoints,
@@ -6256,6 +6333,28 @@ def run_stream(P):
                     gw10_started = True; _gw_fired = True
                 except Exception:
                     gw10_started = gw10_done = True
+
+            g_gw11 = None                                                         # ⑪ LOSS-FUNCTION sweep: same 3 grok panels, one run per loss; rich(blue)/lazy(red) colour-coded; LOSS-CONSISTENT ratio
+            if gw11 and not gw11_done and _grokable and (not _gw_fired or (t + ee > steps)):
+                saved_loss = _TL.loss                                            # restore point (bound BEFORE the try)
+                try:
+                    th0g = (gw11init * _th_init0).detach().clone()               # same init θ for every loss (only the loss changes)
+                    runs = []
+                    for li, (lname, lobj, lcol) in enumerate(GW11_LOSSES):
+                        _TL.loss = lobj                                          # swap the per-sample loss — BOTH the GD step (gradL) and the diagnostics (_grok_diag) read _TL.loss
+                        th_start = th0g.detach().clone()
+                        # main lr + main weight decay (coupled), so the sweep matches the main run except for the loss
+                        stepf = (lambda th: th - lr * (_opt_dir(_TL.model, gradL(th, Xtr_g, Ytr_g)[0], "gd") + wd * th))
+                        mkf = (lambda Xb, Yb, Nb: (lambda th: th - lr * (_opt_dir(_TL.model, gradL(th, Xb, Yb)[0], "gd") + wd * th)))
+                        rec = _grok_train(th_start, Xtr_g, Ytr_g, Xte_g, Yte_g, gw_steps, gw_ev, Ntr_g, Nte_g, outD, ce, stepf,
+                                          batch=gw_batch, bseed=int(P["seed"]), mk_step=mkf)
+                        runs.append({"x": li, "name": lname, "color": lcol, **rec})
+                        yield {"type": "gwstream", "which": "gw11", "payload": {"t": t, "axis": "loss function", "sigma": gw11init, "runs": list(runs)}}
+                    g_gw11 = {"t": t, "axis": "loss function", "sigma": gw11init, "runs": runs}; gw11_done = True; _gw_fired = True
+                except Exception:
+                    g_gw11 = None; gw11_done = True
+                finally:
+                    _TL.loss = saved_loss                                        # ALWAYS restore the real loss
 
             g_gw3p0 = None                                                        # ★grok-③ Panel-0: 5 quadratic-surrogate trainings (true / evolving-re-expand / fixed-init / random / low-rank Q)
             if gw3 and not gw3p0_started and (N * outD) <= grid3dcap and dataset != "owt" and Jc is not None and (not _gw_fired or (t + ee > steps)):
@@ -7421,6 +7520,7 @@ def run_stream(P):
                 "g_gw8": g_gw8,                                # ★grok-⑧ Activation sweep (runs carry a 'name')
                 "g_gw9": g_gw9,                                # ★grok-⑨ random-search-on-M_r-subspace vs GD baseline (2 named runs)
                 "g_gw10": g_gw10,                             # ★grok-⑩ subspace-traversal random-search on Qr (top/bottom/null/random-K) × k∈{1,3,5}
+                "g_gw11": g_gw11,                             # ★grok-⑪ loss-function sweep (log-cosh/erf/pseudo-Huber/e^{r²}/MSE/CE) — 3 panels, loss-consistent ratio, rich/lazy colour-coded
                 "g_gw3p0": g_gw3p0,                           # ★grok-③ Panel-0: 5 quadratic-surrogate trainings (true/evolving/fixed/random/low-rank Q)
                 "g27": g27,                                    # §27: sliding-window 3D subspace projection of the six ∇θ gradient-vectors (50-step lag)
                 "g27x": g27x,                                  # §7 extra panel: per-step cosine similarities + norms of {∇‖g‖², g, ∇‖J‖², J·ṙ, J̇·r, ∇‖J̇‖²}
@@ -8154,6 +8254,8 @@ def _parse_params(q):
         "gw9K": int(g("gw9K", "8")), "gw9refresh": int(g("gw9refresh", "20")), "gw9try": int(g("gw9try", "8")), "gw9thr": float(g("gw9thr", "0.0")),
         "gw10": g("gw10", "0") == "1",   # ★grok-⑩ subspace-traversal random-search on Qr (top/bottom/null/random-K), step maximizes rᵀf (no gradient), k∈{1,3,5}
         "gw10try": int(g("gw10try", "16")), "gw10init": float(g("gw10init", "1.0")),
+        "gw11": g("gw11", "0") == "1", "gw11init": float(g("gw11init", "1.0")),   # ★grok-⑪ loss-function sweep
+
         "gw6init": float(g("gw6init", "1.0")), "gw7init": float(g("gw7init", "1.0")), "gw8init": float(g("gw8init", "1.0")), "gw9init": float(g("gw9init", "1.0")), "gwdiaginit": float(g("gwdiaginit", "1.0")),   # ★grok init-scale controls default 1 = MAIN run's init (tied to main run)
         "gw_n": int(g("gw_n", "6")), "gw_steps": int(g("gw_steps", "600")),  # shared: # sweep points, # GD steps/run
         "gw_ev": int(g("gw_ev", "20")), "gw_nsamp": int(g("gw_nsamp", "500")), "gw_nte": int(g("gw_nte", "200")),    # shared: diag stride, TRAIN + held-out sizes
