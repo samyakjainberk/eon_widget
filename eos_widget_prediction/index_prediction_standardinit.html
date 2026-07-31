@@ -275,7 +275,7 @@
   <label title="§18 — per-sample projection TIME-SERIES for EXACTLY 2 samples. Same two quantities as §12b panels 1 & 2 (the product |⟨J_i,u⟩|·σ·r_i and the alignment |⟨J_i,u⟩|/‖J_i‖ onto the top-2 / bottom-2 eigenvectors of each Q_i) but plotted for sample 1 and sample 2 SEPARATELY over training, instead of the mean/std across samples. Reuses §12's matrix-free Lanczos — enabling this alone computes the projections. Only renders when nsamp = 2."><input type="checkbox" id="en26"> 18 · per-sample projections · sample-1 vs sample-2 (N=2)</label>
   <label title="§19 — does the gradient norm start shrinking when the NTK trace's curvature goes negative? Overlays (A) the one-step-ahead change in gradient norm ‖J_{t+1}ᵀr_{t+1}‖−‖J_tᵀr_t‖ (first-order GD prediction, run's actual η/N step) and (B) D²(tr NTK), the centred 2nd difference of tr(NTK)=‖J‖²_F. Plot 1: A and B over time; Plot 2: raw A−B and normalized Â−B̂. Looks at whether A and B first turn negative at the same step. Small N; best with eigevery=1."><input type="checkbox" id="en27"> 19 · grad-norm change vs D²(NTK) correlation</label>
   <label title="§20 — spectrum of the residual-weighted function Hessian M_r=(1/N)Σ_k r_k Q_k (Q_k=∇²f_k), evolving over training (slider). Shown ÷N (same scale as §1/§2/§3); note M_r = −S, the negative of the residual term in ∇²L=(1/N)JᵀJ−M_r. Top panel: bars of its top-K⊕bottom-K eigenvalues λ_i (grey, matrix-free Lanczos) overlaid with λ_i·|⟨v_i,u_k⟩| (colour), one bar plot per k=1,2,3,4, where u_k is the k-th RIGHT-singular vector of J (k-th top Jacobian direction). Shows how much of each eigenvalue survives projection onto the top-4 Jacobian directions. Bottom panel: the bare alignment |⟨v_i,u_k⟩|. Small N; K set below."><input type="checkbox" id="en28"> 20 · M_r=Σr_kQ_k spectral histograms <input type="number" id="s28k" value="40" min="1" max="400" step="1" title="§20: number of eigenpairs per side (top-K ⊕ bottom-K) of M_r" style="width:52px;margin-left:4px"></label>
-  <label title="§5 — how the residual r and the residual-contracted gradient J·r=Σ_k r_k∇f_k align with the leading spectral directions, over training (slider). Two panels, each projecting four ways (bare cosine |⟨·⟩|/‖·‖, raw |⟨·⟩|, and each ×eigenvalue; grey bar = bare eigenvalue on the weighted plots). Panel 1: r onto the top-K NTK (JJᵀ) eigvecs v_i (σ_i÷N). Panel 2: J·r onto the top-K⊕bottom-K eigvecs u_i of M_r=(1/N)Σ_k r_kQ_k (signed λ_i÷N). Small N; K set right."><input type="checkbox" id="en29"> 6 · residual ↔ spectrum alignment <input type="number" id="s29k" value="40" min="1" max="400" step="1" title="§5: NTK top-K & M_r top-K⊕bottom-K" style="width:52px;margin-left:4px"></label>
+  <label title="§5 — how the residual r and the residual-contracted gradient J·r=Σ_k r_k∇f_k align with the leading spectral directions, over training (slider). Two panels, each projecting four ways (bare cosine |⟨·⟩|/‖·‖, raw |⟨·⟩|, and each ×eigenvalue; grey bar = bare eigenvalue on the weighted plots). Panel 1: r onto the top-K NTK (JJᵀ) eigvecs v_i (σ_i÷N). Panel 2: J·r onto the top-K⊕bottom-K eigvecs u_i of M_r=(1/N)Σ_k r_kQ_k (signed λ_i÷N). Small N; K set right."><input type="checkbox" id="en29" checked> 6 · residual ↔ spectrum alignment <input type="number" id="s29k" value="40" min="1" max="400" step="1" title="§5: NTK top-K & M_r top-K⊕bottom-K" style="width:52px;margin-left:4px"></label>
   <label title="§22 REPLACE mode — selecting this makes the WHOLE run a FROZEN-Q quadratic-Taylor surrogate: §1 (loss/sharpness/residual), §2/§3 (function-Hessian / loss-Hessian / Gauss-Newton=NTK / residual-weighted spectra) and §20 (M_r) all show the surrogate trajectory instead of the real model (§4–§21 are off). Q is frozen at the iteration t you set (right): real full-batch GD reaches θ_t, then GD runs on the quadratic loss; slider scrubs the surrogate's own iterations. §22/§23 are mutually exclusive. MSE only; small N (M ≤ grid3dcap)."><input type="checkbox" id="en30"> 22 · run on frozen-Q quadratic surrogate · freeze t= <input type="number" id="s30t" value="0" min="0" max="100000" step="1" title="§22: iteration t at which to freeze the 2nd-order Taylor (θ_t, J_t, Q_t)" style="width:62px;margin-left:4px"></label>
   <label title="§23 REPLACE mode — like §22 but the function Hessian is a FIXED low-rank RANDOM symmetric operator (rank R, scaled to the real Hessian's λmax × scale): selecting this makes §1/§2/§3/§20 show the random-Q quadratic surrogate trajectory from θ₀ — a null model (§4–§21 off, §22/§23 mutually exclusive). MSE only."><input type="checkbox" id="en31"> 23 · run on random-Hessian surrogate · R= <input type="number" id="s31r" value="200" min="1" max="2000" step="1" title="§23: rank R of the random function Hessian" style="width:58px;margin-left:4px"> scale <input type="number" id="s31scale" value="1.0" min="0" max="100" step="0.1" title="§23: random-Hessian spectral norm = real fn-Hessian λmax × this" style="width:50px;margin-left:2px"></label>
   <label title="§24 — decompose the 1-GD-step change in each output f_k into its FIRST-order term A=JJᵀr (NTK·r) and SECOND-order term B_k=(η/2N)(J·r)ᵀQ_k(J·r); plot ‖·‖, |cos|, and eigenvalue-weighted projections of A,B onto the residual r and the top-4 NTK eigenvectors u₁–u₄, as time-series over training. Needs the M×p Jacobian + a per-output Hessian-vp (GPU backend; small N). uᵢ is shown when M≥i (so u₃ needs M≥3, u₄ needs M≥4)."><input type="checkbox" id="en32"> 24 · 1st/2nd-order Δf alignment (A=JJᵀr, B=η/2N·JrᵀQ_kJr)</label>
@@ -657,10 +657,15 @@
   <input id="sinit_slider" type="range" min="0" max="0" value="0" step="1" style="flex:1" oninput="sinitRenderNow(+this.value)">
   <span id="sinit_step" style="white-space:nowrap;color:#475569;font-size:13px;min-width:170px">—</span>
 </div>
-<h3 style="margin:10px 0 2px;font-size:14px;color:#475569">Panels 1-2 — CURRENT mapped $|\cos|$ · <b style="color:#2563eb">left</b>: $r$ → frozen NTK eigenvectors · <b style="color:#be123c">right</b>: $J\!\cdot\!r$ → frozen $M_r$ eigenvectors · x = $t{=}0$ eigenvalue rank</h3>
-<div class="plotrow row2"><div id="p_sinit_1" class="plot" style="height:360px"></div><div id="p_sinit_2" class="plot" style="height:360px"></div></div>
-<h3 style="margin:16px 0 2px;font-size:14px;color:#475569">Panels 3-4 — per-position RUNNING MAX up to step $t$ (the cycle envelope) · <b style="color:#1d4ed8">left</b>: NTK · <b style="color:#9f1239">right</b>: $M_r$</h3>
-<div class="plotrow row2"><div id="p_sinit_3" class="plot" style="height:360px"></div><div id="p_sinit_4" class="plot" style="height:360px"></div></div>
+<p class="cap" style="margin:2px 0 6px">Each panel projects one vector onto one operator's frozen eigenvectors, <b>four ways</b> (like section-6): bare cosine $|\langle\cdot\rangle|/\lVert\cdot\rVert$, raw $|\langle\cdot\rangle|$, and each $\times$ the frozen eigenvalue (grey bar = the frozen eigenvalue behind the coloured one). x-axis = $t{=}0$ eigenvalue rank (topmost → bottommost).</p>
+<h3 style="margin:10px 0 2px;font-size:14px;color:#475569">Panel 1 — CURRENT mapped: residual $r$ → frozen <b>NTK</b> eigenvectors $v_i$ ($\sigma_i^0$ frozen; grey on the σ-weighted plots)</h3>
+<div class="plotrow row4"><div id="p_sinit_n1" class="plot" style="height:340px"></div><div id="p_sinit_n2" class="plot" style="height:340px"></div><div id="p_sinit_n3" class="plot" style="height:340px"></div><div id="p_sinit_n4" class="plot" style="height:340px"></div></div>
+<h3 style="margin:16px 0 2px;font-size:14px;color:#475569">Panel 2 — CURRENT mapped: $J\!\cdot\!r$ → frozen <b>$M_r$</b> eigenvectors $u_i$ ($\lambda_i^0$ frozen, signed; grey on the λ-weighted plots)</h3>
+<div class="plotrow row4"><div id="p_sinit_p1" class="plot" style="height:340px"></div><div id="p_sinit_p2" class="plot" style="height:340px"></div><div id="p_sinit_p3" class="plot" style="height:340px"></div><div id="p_sinit_p4" class="plot" style="height:340px"></div></div>
+<h3 style="margin:18px 0 2px;font-size:14px;color:#9f1239"><b>Panel 3 — RUNNING MAX up to step $t$</b> (cycle envelope): residual $r$ → frozen NTK · 4 ways</h3>
+<div class="plotrow row4"><div id="p_sinit_rn1" class="plot" style="height:340px"></div><div id="p_sinit_rn2" class="plot" style="height:340px"></div><div id="p_sinit_rn3" class="plot" style="height:340px"></div><div id="p_sinit_rn4" class="plot" style="height:340px"></div></div>
+<h3 style="margin:16px 0 2px;font-size:14px;color:#9f1239"><b>Panel 4 — RUNNING MAX up to step $t$</b> (cycle envelope): $J\!\cdot\!r$ → frozen $M_r$ · 4 ways</h3>
+<div class="plotrow row4"><div id="p_sinit_rp1" class="plot" style="height:340px"></div><div id="p_sinit_rp2" class="plot" style="height:340px"></div><div id="p_sinit_rp3" class="plot" style="height:340px"></div><div id="p_sinit_rp4" class="plot" style="height:340px"></div></div>
 </div>
 
 <div id="sec_s22" style="display:none">
@@ -3092,19 +3097,27 @@ function s21RenderNow(i){const s=S21_SNAPS[i];if(!s)return;S21_CURIDX=i;
 function s21RenderIdx(i){S21_PENDING=i;if(S21_RAF)return;S21_RAF=requestAnimationFrame(()=>{S21_RAF=0;const j=S21_PENDING;S21_PENDING=-1;if(j>=0)s21RenderNow(j);});}
 // ===== §7 (prediction_standardinit): section-6 on the FROZEN t=0 ranking + per-position running-max =====
 let SINIT_SNAPS=[];
-function sinitBar(id,y,eig,title,color,ylab){ if(!y)return; const x=y.map((_,k)=>k);
-  try{Plotly.react(id,[{type:'bar',x:x,y:y,marker:{color:color},
-     hovertext:(eig||[]).map((e,i)=>'rank '+i+(e!=null?' · λ0='+(+e).toExponential(2):'')),hoverinfo:'y+text'}],
-    {title:{text:title,font:{size:12}},margin:{l:50,r:8,t:26,b:34},
-     xaxis:{title:{text:'t=0 eigenvalue rank',font:{size:11}}},yaxis:{title:{text:ylab,font:{size:11}},rangemode:'tozero'}},
-    {displayModeBar:false,responsive:true});}catch(e){}
-}
+function sinitRun(i,key){let mx=-Infinity,mn=Infinity;for(let q=0;q<=i&&q<SINIT_SNAPS.length;q++){const a=SINIT_SNAPS[q][key];if(!a)continue;for(const v of a){if(!Number.isFinite(v))continue;if(v>mx)mx=v;if(v<mn)mn=v;}}return [isFinite(mx)?mx:null,isFinite(mn)?mn:null];}
 function sinitRenderNow(i){const s=SINIT_SNAPS[i];if(!s)return;
-  sinitBar('p_sinit_1',s.n1,s.sig0,'Panel 1 · r → frozen NTK (mapped |cos|)','#2563eb','|cos(r,vi)|');
-  sinitBar('p_sinit_2',s.p1,s.lam0,'Panel 2 · J·r → frozen M_r (mapped |cos|)','#be123c','|cos(Jr,ui)|');
-  sinitBar('p_sinit_3',s.rn1,s.sig0,'Panel 3 · NTK running-max |cos| (<= t)','#1d4ed8','max |cos|');
-  sinitBar('p_sinit_4',s.rp1,s.lam0,'Panel 4 · M_r running-max |cos| (<= t)','#9f1239','max |cos|');
+  // reuse section-6's bar drawer (grey eigenvalue overlay + signed y + run max/min). 4 panels × 4 ways.
+  // Panel 1 (CURRENT: r → frozen NTK): n1..n4 (≥0); grey σ0 on #3,#4
+  const N1=['p_sinit_n1','p_sinit_n2','p_sinit_n3','p_sinit_n4'],Nk=['n1','n2','n3','n4'],Ne=[null,null,s.sig0,s.sig0];
+  const Nl=['|⟨v_i,r⟩|/‖r‖','|⟨v_i,r⟩|','σ⁰_i·|⟨v_i,r⟩|/‖r‖','σ⁰_i·|⟨v_i,r⟩|'];
+  for(let k=0;k<4;k++){const r=sinitRun(i,Nk[k]);s21BarDraw(N1[k],Ne[k],s[Nk[k]],Nl[k],S21_COLS[k],false,r[0],r[1]);}
+  // Panel 2 (CURRENT: J·r → frozen M_r): p1..p4; #3,#4 signed w/ grey λ0
+  const P1=['p_sinit_p1','p_sinit_p2','p_sinit_p3','p_sinit_p4'],Pk=['p1','p2','p3','p4'],Pe=[null,null,s.lam0,s.lam0],Ps=[false,false,true,true];
+  const Pl=['|⟨u_i,J·r⟩|/‖J·r‖','|⟨u_i,J·r⟩|','λ⁰_i·|⟨u_i,J·r⟩|/‖J·r‖','λ⁰_i·|⟨u_i,J·r⟩|'];
+  for(let k=0;k<4;k++){const r=sinitRun(i,Pk[k]);s21BarDraw(P1[k],Pe[k],s[Pk[k]],Pl[k],S21_COLS[k],Ps[k],r[0],r[1]);}
+  // Panel 3 (RUNNING MAX up to t: r → NTK): the bars ARE the per-position running max (rn1..rn4)
+  const R1=['p_sinit_rn1','p_sinit_rn2','p_sinit_rn3','p_sinit_rn4'],Rk=['rn1','rn2','rn3','rn4'],Re=[null,null,s.sig0,s.sig0];
+  const Rl=['runmax |⟨v_i,r⟩|/‖r‖','runmax |⟨v_i,r⟩|','runmax σ⁰_i·|⟨v_i,r⟩|/‖r‖','runmax σ⁰_i·|⟨v_i,r⟩|'];
+  for(let k=0;k<4;k++){s21BarDraw(R1[k],Re[k],s[Rk[k]],Rl[k],S21_COLS[k],false,null,null);}
+  // Panel 4 (RUNNING MAX up to t: J·r → M_r): rp1..rp4; #3,#4 signed w/ grey λ0
+  const Q1=['p_sinit_rp1','p_sinit_rp2','p_sinit_rp3','p_sinit_rp4'],Qk=['rp1','rp2','rp3','rp4'],Qe=[null,null,s.lam0,s.lam0],Qs=[false,false,true,true];
+  const Ql=['runmax |⟨u_i,J·r⟩|/‖J·r‖','runmax |⟨u_i,J·r⟩|','runmax λ⁰_i·|⟨u_i,J·r⟩|/‖J·r‖','runmax λ⁰_i·|⟨u_i,J·r⟩|'];
+  for(let k=0;k<4;k++){s21BarDraw(Q1[k],Qe[k],s[Qk[k]],Ql[k],S21_COLS[k],Qs[k],null,null);}
   const sp=document.getElementById('sinit_step');if(sp)sp.textContent='step '+s.t+' · snapshot '+(i+1)+'/'+SINIT_SNAPS.length+' · K='+s.K;
+  const sl=document.getElementById('sinit_slider');if(sl&&+sl.value!==i)sl.value=i;
 }
 function sinitPush(m){if(!m||!m.n1)return;
   if(SINIT_SNAPS.length&&m.t<SINIT_SNAPS[SINIT_SNAPS.length-1].t)SINIT_SNAPS=[];   // new run => reset
@@ -6518,14 +6531,17 @@ function makeCompareSection(pre, kind) {
 }
 
 function reorderPredictionLayout(){   // base panels §1-6 on top, then Prediction-1&2 → 3 → 4 → 4.2(ray) → 5.1(trace) → 5.2(σ₁) → 6
-  const order=['sec_1','sec_2','sec_3','sec_slqH','sec_4','sec_s21','sec_s27','sec_eds','sec_ss','sec_qspec','sec_s6f','sec_sweep','sec_pred3_box','sec_pred4_box','sec_predray','sec_trace','sec_pred','sec_pred6'];   // sec_eds = Early-dynamics stats; sec_ss = Self-stabilization; sec_qspec = Q eigenspectrum; sec_s6f = §6 fixed-basis — all NOT predictions, ABOVE Prediction-1&2; sec_predray = ★ Prediction 4.2 (ray), right after Prediction-4
+  // prediction_standardinit: FOCUSED widget — keep only §1 (loss/sharp/resid + eig edges), §2 (eig top-n), §3 (eig bottom-n),
+  // §4 SLQ spectrum (sec_slqH), §5 J-projections (sec_4), §6 residual↔spectrum (sec_s21), and the new §7 fixed-basis (sec_sinit).
+  // Everything else (ALL Prediction panels + the old §7 ∇θ-subspace sec_s27 + the other diagnostics) is force-hidden below.
+  const order=['sec_1','sec_2','sec_3','sec_slqH','sec_4','sec_s21','sec_sinit'];
   const anchor=document.getElementById('sec_pred'); if(!anchor)return; const parent=anchor.parentNode; if(!parent)return;
   for(const id of order){const e=document.getElementById(id); if(e&&e.parentNode===parent)parent.insertBefore(e,anchor);}   // insert each before sec_pred (5.2 is the anchor)
   {const p6=document.getElementById('sec_pred6'); if(p6&&p6.parentNode===parent)parent.insertBefore(p6, anchor.nextSibling);}   // Prediction-6 goes AFTER 5.2 (sec_pred), so the numbering reads 1&2→3→4→5.1→5.2→6
   // ★ STRICT SEPARATION from the original widget: force-hide EVERY section that is not part of the prediction widget.
   // The other en* toggles/presets stay in the DOM so chk()/forced computations still resolve, but their ORIGINAL-widget
   // sections must never render here. .pred-off is display:none!important, so it beats syncSectionVis's inline style=''.
-  const keep=new Set(order.concat(['sec_pred3','sec_pred3m','sec_pred4','sec_pred4m']));   // box children ride along with their _box parents
+  const keep=new Set(order);   // FOCUSED widget: keep ONLY the §1-§7 diagnostic sections above; force-hide all Prediction panels + the rest
   document.querySelectorAll('[id^="sec_"],[id^="s12grp_"]').forEach(el=>{ if(!keep.has(el.id)) el.classList.add('pred-off'); });
 }
 window.addEventListener('load',()=>{reorderPredictionLayout();applyPreset('chebyshev');drawPreview();updateParamBadge();
