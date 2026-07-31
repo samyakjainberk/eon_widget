@@ -1623,6 +1623,17 @@ class ExpSqLoss(_ElemLoss):          # ℓ″=2(1+2r²)e^{r²} → ∞ super-exp
     def _d1(self, r): rc = self._rc(r); return 2.0 * rc * torch.exp(rc * rc)
     def _d2(self, r): rc = self._rc(r); return 2.0 * (1.0 + 2.0 * rc * rc) * torch.exp(rc * rc)
 
+class WelschLoss(_ElemLoss):         # 1−e^{−r²}: REDESCENDING — both ℓ′,ℓ″→0, ℓ″ slower (|ℓ″|/|ℓ′|∼2r→∞) ⇒ NTK/lazy; ℓ″<0 tail. Bounded [0,1); min 0 at r=0
+    name = "welsch"
+    def _l(self, r): return 1.0 - torch.exp(-r * r)
+    def _d1(self, r): return 2.0 * r * torch.exp(-r * r)
+    def _d2(self, r): return 2.0 * (1.0 - 2.0 * r * r) * torch.exp(-r * r)
+class SuperGaussLoss(_ElemLoss):     # 1−e^{−r⁴}: redescending, FASTER blow-up (|ℓ″|/|ℓ′|∼4r³→∞). Bounded [0,1); min 0 at r=0
+    name = "supergauss"
+    def _l(self, r): r2 = r * r; return 1.0 - torch.exp(-r2 * r2)
+    def _d1(self, r): r2 = r * r; return 4.0 * r * r2 * torch.exp(-r2 * r2)
+    def _d2(self, r): r2 = r * r; return (12.0 * r2 - 16.0 * r2 * r2 * r2) * torch.exp(-r2 * r2)
+
 class BinLogisticLoss:               # binary-logistic CE on the scalar logit z=f; target ỹ=sign(y)∈{±1}  ⇒ reference (grey)
     name = "bce"
     def _tokens(self, out, N): return N * out.shape[1] if out.dim() == 3 else N
@@ -1642,7 +1653,9 @@ GW11_LOSSES = [
     ("erf-integral", ErfIntLoss(),      "#1e3a8a"),   # dark blue  (Gaussian ℓ″ decay — most rich)
     ("log-cosh",     LogCoshLoss(),     "#2563eb"),   # blue       (exponential ℓ″ decay)
     ("pseudo-Huber", PseudoHuberLoss(), "#60a5fa"),   # light blue (polynomial ℓ″ decay — least rich)
-    ("e^{r²}−1",     ExpSqLoss(),       "#dc2626"),   # red        (super-exp ℓ″ growth — lazy)
+    ("e^{r²}−1",     ExpSqLoss(),       "#dc2626"),   # red        (Route-A growth — ℓ″>0, lazy)
+    ("Welsch 1−e^{−r²}", WelschLoss(),  "#f87171"),   # light red  (Route-B redescending — lazy, ℓ″<0 tail)
+    ("1−e^{−r⁴}",    SuperGaussLoss(),  "#991b1b"),   # dark red   (Route-B redescending — faster ℓ″/ℓ′)
     ("MSE",          MSELoss(),         "#000000"),   # black      (reference)
     ("CE (logistic)", BinLogisticLoss(), "#9ca3af"),  # grey       (binary cross-entropy)
 ]
