@@ -6034,7 +6034,11 @@ const PRESETS={
   // ~0, fitting the teacher exactly). Tiny (p=2·indim); GPU backend (the diagonal-linear arch is server-side).
 };
 function setVal(id,v){document.getElementById(id).value=String(v);}
-function applyPreset(name){const P=PRESETS[name];if(!P)return;for(const k in P){const el=document.getElementById(k);if(!el)continue;if(el.type==='checkbox')el.checked=!!P[k];else el.value=String(P[k]);}syncLossPanels();updateParamBadge();syncInitScaleEnabled();}
+const SINIT_KEPT=new Set(['en1','en2','en3','enSlq','en4','en29','enSinit']);   // prediction_standardinit: the ONLY panels this focused widget may compute
+function enforceKeptOnly(){   // presets hardcode en12:1,en13:1 (some also en18-en28); force every non-kept panel OFF so the backend never computes (or index-OOB-crashes on) a hidden section
+  document.querySelectorAll('.toggles input[type=checkbox]').forEach(cb=>{if(cb.id&&!SINIT_KEPT.has(cb.id))cb.checked=false;});
+}
+function applyPreset(name){const P=PRESETS[name];if(!P)return;for(const k in P){const el=document.getElementById(k);if(!el)continue;if(el.type==='checkbox')el.checked=!!P[k];else el.value=String(P[k]);}enforceKeptOnly();syncLossPanels();updateParamBadge();syncInitScaleEnabled();}
 // mup / xavier_* set the weight variance from fan-in/fan-out (canonical) — the init_scale knob is unused there,
 // so grey it out to make that explicit. It stays active for default (scale) and custom (Gaussian std).
 function syncInitScaleEnabled(){const sch=val('initscheme'),off=(sch==='mup'||sch==='xavier_normal'||sch==='xavier_uniform'||sch==='kaiming_normal'||sch==='kaiming_uniform');
