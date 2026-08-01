@@ -3153,7 +3153,9 @@ def cubic_self_step(ctx, st, th, X, Y, t, rr, bEk_vals, opt="gd"):
     etaN = lr / max(N, 1); reps_ = max(1, ee); eps = 1e-2
     dev, dt = _dev(), DTYPE
     rec = {}
-    if not (multi and multi_ok):
+    # ★ run for multi (with the cost cap) OR SINGLE-SAMPLE (M=outD is tiny): the cubic J/Q/T propagation is
+    #   dimension-general and reduces to the single-sample Eq-47 self at M=outD, so cubic·self plots for N=1 too.
+    if not ((multi and multi_ok) or (not multi and M <= 2048)):
         return rec
     th0 = st["Th0"]
 
@@ -3177,7 +3179,8 @@ def cubic_self_step(ctx, st, th, X, Y, t, rr, bEk_vals, opt="gd"):
         st["Dth"] = torch.zeros(p, dtype=dt, device=dev)            # Δθ self-trajectory (starts at 0 ⇒ r_q = live r)
     if st["J"] is None or st["F0"] is None:
         return rec
-    actN = float(bEk_vals[0]); cap = 10.0 * max(actN, 1e-30)
+    actN = float(bEk_vals[0]) if bEk_vals is not None else float(st["Base"])   # single-sample: bEk_vals is None ⇒ use the frozen top eigenvalue for the clamp reference
+    cap = 10.0 * max(actN, 1e-30)
     clmp = lambda x: min(max(x, 0.0), cap)
     rec["c51d"] = clmp(st["Base"] + st["A51"]) / N                  # predicted σ₁ THROUGH the previous step (pre-update, matches c51 ordering)
     rec["c51dp"] = clmp(st["Base"] + st["A51"] + st["P51"]) / N     # + PSD term Σ‖ΔJᵀu₁‖²

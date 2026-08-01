@@ -4268,7 +4268,7 @@ function pushPoint(t,D,n,kth,nResid){
   }
   {   // ★ prediction demo panel — render from the step payload, independent of the section toggles
     const _si=Math.max(0,parseInt((document.getElementById('stat_init')||{}).value)||0), _pg=(t>=_si);   // 5.2 forecasts begin only AFTER stat_init; the actual σ₁/λmax curves are shown throughout
-    const aN=(D.thA&&D.thA[1]!=null)?D.thA[1]:null, sh=(D.thAH==null?null:D.thAH);
+    const aN=(D.thA?(D.thA[1]!=null?D.thA[1]:D.thA[0]):null), sh=(D.thAH==null?null:D.thAH);
     // ★ single-sample fallback: the demo panel uses the MULTI eqs (Eq-21 col[1], Eq-51), but a 1-sample run only fills
     //   the SINGLE eqs (Eq-13 col[0], Eq-47). Fall back to col[0]/c47 so the σ₁ forecasts draw for single-sample too.
     if(D.thP){const _p=(D.thP[1]!=null?D.thP[1]:D.thP[0]),_pp=(D.thPpsd?(D.thPpsd[1]!=null?D.thPpsd[1]:D.thPpsd[0]):null);const pv=_pg?_p:null,pp=_pg?_pp:null;if(pv!=null||pp!=null||sh!=null||aN!=null)extP('p_pd1',{x:[[t],[t],[t],[t]],y:[[pv],[pp],[sh],[aN]]},[0,1,2,3]);}

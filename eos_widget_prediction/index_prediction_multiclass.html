@@ -4267,7 +4267,7 @@ function pushPoint(t,D,n,kth,nResid){
   }
   {   // ★ prediction demo panel — render from the step payload, independent of the section toggles
     const _si=Math.max(0,parseInt((document.getElementById('stat_init')||{}).value)||0), _pg=(t>=_si);   // 5.2 forecasts begin only AFTER stat_init; the actual σ₁/λmax curves are shown throughout
-    const aN=(D.thA&&D.thA[1]!=null)?D.thA[1]:null, sh=(D.thAH==null?null:D.thAH);
+    const aN=(D.thA?(D.thA[1]!=null?D.thA[1]:D.thA[0]):null), sh=(D.thAH==null?null:D.thAH);
     if(D.thP){const pv=_pg?(D.thP[1]!=null?D.thP[1]:D.thP[0]):null,pp=(_pg&&D.thPpsd)?(D.thPpsd[1]!=null?D.thPpsd[1]:D.thPpsd[0]):null;if(pv!=null||pp!=null||sh!=null||aN!=null)extP('p_pd1',{x:[[t],[t],[t],[t]],y:[[pv],[pp],[sh],[aN]]},[0,1,2,3]);}
     if(D.thP_d){const pv=_pg?(D.thP_d[1]!=null?D.thP_d[1]:D.thP_d[0]):null,pp=(_pg&&D.thPpsd_d)?(D.thPpsd_d[1]!=null?D.thPpsd_d[1]:D.thPpsd_d[0]):null;if(pv!=null||pp!=null||sh!=null||aN!=null)extP('p_pd2',{x:[[t],[t],[t],[t]],y:[[pv],[pp],[sh],[aN]]},[0,1,2,3]);}
     const cN=(D.cActN==null?null:D.cActN),cH=(D.cActH==null?null:D.cActH);
