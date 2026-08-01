@@ -3861,13 +3861,13 @@ function gw3RenderSpec(i){       // redraw the §6 bar panels for snapshot i (NT
    const L=Object.assign({},g.layout);L.xaxis=Object.assign({},L.xaxis,{type:lg?'log':'linear'});L.xaxis.title={text:lg?'rank+1 (eigenvalues, high→low)':'rank (eigenvalues, high→low)'};L.yaxis=Object.assign({},L.yaxis,{type:'linear'});L.yaxis.title={text:lg?'sign(λ)·log₁₀(1+|λ|/λref) (M_r)':'eigenvalue λ (M_r)'};try{Plotly.react('p_gw3_spec',tr.length?tr:[{x:[],y:[]}],L);}catch(e){}}}
   const st=document.getElementById('gw3_step');if(st)st.textContent='step '+S.t+' · snapshot '+(i+1)+'/'+GW3_SNAP.length;
 }
-function toggleGw3(){const cb=document.getElementById('engw3'),el=document.getElementById('sec_gw3');if(!cb||!el)return;el.style.display=cb.checked?'block':'none';if(cb.checked)requestAnimationFrame(()=>{for(const id of ['p_gw3p0_loss','p_gw3p0_acc','p_gw3p0_sharp','p_gw3p0_qr','p_gw3p0_hq','p_gw3_n1','p_gw3_n2','p_gw3_n3','p_gw3_n4','p_gw3_m1','p_gw3_m2','p_gw3_m3','p_gw3_m4','p_gw3_g1','p_gw3_g2','p_gw3_g3','p_gw3_g4','p_gw3_spec']){const g=document.getElementById(id);if(g&&g._fullLayout){try{Plotly.Plots.resize(g);}catch(e){}}}});}
+function toggleGw3(){const cb=document.getElementById('engw3'),el=document.getElementById('sec_gw3');if(!cb||!el)return;el.style.display=cb.checked?'block':'none';if(cb.checked)resizeAllPlots();}   // ★ resize ALL now-visible plots (was a hardcoded id list that missed Panel-1/2 nt*/mr* ⇒ grid overflow)
 {const sl=document.getElementById('gw3_slider');if(sl)sl.addEventListener('input',()=>gw3RenderSpec(+sl.value));
  document.querySelectorAll('.gw3mode').forEach(c=>c.addEventListener('change',()=>{const sl=document.getElementById('gw3_slider');gw3RenderSpec(sl?+sl.value:GW3_SNAP.length-1);}));}
 function toggleGw4(){const cb=document.getElementById('engw4'),el=document.getElementById('sec_gw4');if(!cb||!el)return;el.style.display=cb.checked?'block':'none';if(cb.checked)requestAnimationFrame(()=>{for(const id of ['p_gw4_r0','p_gw4_r1','p_gw4_r2','p_gw4_r3','p_gw4h_r0','p_gw4h_r1','p_gw4h_r2','p_gw4h_r3']){const g=document.getElementById(id);if(g&&g._fullLayout){try{Plotly.Plots.resize(g);}catch(e){}}}});}
 function toggleGw1(){const cb=document.getElementById('engw1'),el=document.getElementById('sec_gw1');if(!cb||!el)return;el.style.display=cb.checked?'block':'none';if(cb.checked)requestAnimationFrame(()=>{for(const id of ['p_gw1_1','p_gw1_2','p_gw1_3']){const g=document.getElementById(id);if(g&&g._fullLayout){try{Plotly.Plots.resize(g);}catch(e){}}}});}
 // ★grok-⑤⑥⑦⑧ (page-1 intervention experiments) — shared toggle + render helpers
-function _gwToggle(pfx,en){const cb=document.getElementById(en),el=document.getElementById('sec_'+pfx);if(!cb||!el)return;el.style.display=cb.checked?'block':'none';if(cb.checked)requestAnimationFrame(()=>{for(const s of ['lte','ltr','ate','atr','ratio','mrgn','ps','align','jr23','jr45','jr67','jr89']){const g=document.getElementById('p_'+pfx+'_'+s);if(g&&g._fullLayout){try{Plotly.Plots.resize(g);}catch(e){}}}});}
+function _gwToggle(pfx,en){const cb=document.getElementById(en),el=document.getElementById('sec_'+pfx);if(!cb||!el)return;el.style.display=cb.checked?'block':'none';if(cb.checked)resizeAllPlots();}   // ★ resize ALL now-visible plots (was a hardcoded id list that missed panels ⇒ grid overflow)
 function toggleGw5(){_gwToggle('gw5','engw5');}
 function toggleGw6(){_gwToggle('gw6','engw6');}
 function toggleGw7(){_gwToggle('gw7','engw7');}
@@ -4395,7 +4395,7 @@ function initLivePlots(n,kth,nResid,thr,n7,n8,multi){
 // plots created inside a hidden (display:none) section get Plotly's fallback size; once the
 // section is visible, force each to re-measure its 320px container so every row stays aligned.
 function resizeAllPlots(){
-  const go=()=>PLOT_IDS.concat(['p_ray_sig','p_ray_jf','p_ray_clock','p_ray_exit']).forEach(id=>{const gd=document.getElementById(id);   // ★ 4.2 ray divs aren't in PLOT_IDS (kept out of the purge sweep) but should still re-fit on window resize; the offsetParent guard skips them when the section is hidden
+  const go=()=>document.querySelectorAll('div.plot').forEach(gd=>{   // ★ re-fit EVERY visible, initialized 2D panel (incl. ★grok gw* panels, which were excluded before ⇒ their SVG kept a stale/default width and spilled the grid → page overflow)
     if(gd&&gd._fullLayout&&gd.offsetParent!==null){try{Plotly.Plots.resize(gd);}catch(e){}}});
   requestAnimationFrame(go); setTimeout(go,60);
 }
