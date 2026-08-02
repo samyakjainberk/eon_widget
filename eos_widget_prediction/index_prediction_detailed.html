@@ -320,6 +320,10 @@
   <label title="★grok-⑨ Random-search descent — GRADIENTS ONLY pick the search subspace (the top-K eigenvectors of M_r, recomputed every N steps); within it the update is pure RANDOM SEARCH: sample random directions, keep the one that decreases the loss AND makes Δf align with the residual (f moves toward the targets). Compares this random-search optimizer against a plain-GD baseline. No gradient step is ever taken."><input type="checkbox" id="engw9" onchange="toggleGw9()"> ★grok-⑨ · Random-search on the top-M_r subspace (vs GD)</label>
   <label title="★grok-⑩ Subspace-traversal random-search on Qr=Σ_i r_iQ_i. Four runs traverse a k-dim subspace (recomputed every iteration): top-k / bottom-k / null-k (smallest |λ|) / random-k. NO gradient is used for the step — sample random directions in the subspace and take the one maximizing rᵀf(θ') (r frozen at current θ). Panel 1 = train/test loss & accuracy (all 4 runs); Panel 2 = |cos(r, NTK eigvec-i)| for i=1..4 (NTK recomputed per run, per iteration). Three copies for k∈{1,3,5}."><input type="checkbox" id="engw10" onchange="toggleGw10()"> ★grok-⑩ · Subspace-traversal random-search on Q_r (top/bottom/null/random-k, k∈{1,3,5})</label>
   <label title="★grok-⑪ Loss-function sweep — the same 3 grok panels (loss/acc · ratio/PS/alignment · residual↔NTK pairs) but the sweep axis is the LOSS. One run per loss from the same init, trained with the main lr + weight decay. Colour codes the regime by ℓ''/ℓ': blue = rich/feature (log-cosh, erf-integral, pseudo-Huber), red = lazy/kernel (e^{r²}−1), black = MSE, grey = CE. The ratio panel is loss-consistent: |gᵀMg|/|gᵀGg| with M=Σℓ'_kQ_k, G=Jᵀdiag(ℓ'')J."><input type="checkbox" id="engw11" onchange="toggleGw11()"> ★grok-⑪ · Loss-function sweep (rich↔lazy: log-cosh · erf-int · pseudo-Huber · e^{r²}−1 · Welsch · 1−e^{−r⁴} · MSE · CE)</label>
+  <label title="★grok-⑫ GD vs SGD — the same 3 grok panels PLUS Panel-4, swept over the minibatch size {1,2,4,…,512(<full),full-batch}. Every statistic (loss/acc/ratio/PS/align/NTK-pairs and Panel-4) is measured on the FULL batch; only the θ-update uses the minibatch. Panel-4 = |cos(Q_r top/bottom-4 eigenvector, Jᵀr)|. Colour red (batch=1) → blue (full). No weight decay."><input type="checkbox" id="engw12" onchange="toggleGw12()"> ★grok-⑫ · GD vs SGD (batch-size sweep, full-batch statistics) + Panel-4 Q_r-eigvec↔Jᵀr</label>
+  <label title="★grok-⑬ Momentum × batch size — same 4 panels as ⑫, sweeping heavy-ball momentum μ∈{0,0.1,0.25,0.5,0.75,0.9,0.95,0.99,1.0} at four batch sizes {full, full//2, full//4, full//8}. Dropdown picks the batch size to plot. Colour red (μ=0) → blue (μ=1). Statistics full-batch, no weight decay."><input type="checkbox" id="engw13" onchange="toggleGw13()"> ★grok-⑬ · Momentum × batch size (μ sweep at full / //2 / //4 / //8)</label>
+  <label title="★grok-⑭ Generalization gap ↔ init curvature. For each init std σ (very small→large; iid Gaussian θ~N(0,σ)), run many random-seed 2k-iter full-batch GD trainings; scatter y=Σ_t(L_test−L_train) vs the init-time (t=0) x = gᵀM_rg−gᵀJJᵀg (and gᵀM_rg÷gᵀJJᵀg, signed). g=Jᵀr, M_r=Σr_kQ_k. 3 panels × 2 σ = 12 scatter plots; Pearson r per plot. Tests whether large init curvature correlates with generalization. #seeds gw14seeds, iters gw14steps."><input type="checkbox" id="engw14" onchange="toggleGw14()"> ★grok-⑭ · Generalization gap ↔ init curvature (multi-seed scatter, 6 σ)</label>
+  <span style="display:block;font-size:12px;color:#475569;margin:2px 0"> ⑭ knobs: seeds/σ <input id="gw14seeds" value="24" style="width:34px"> · iters/run <input id="gw14steps" value="2000" style="width:48px"></span>
   <span style="display:block;font-size:12px;color:#475569;margin:2px 0"> shared knobs (grok-⑤–⑨): # points <input id="gw_n" value="6" style="width:34px"> · steps/run <input id="gw_steps" value="600" style="width:44px"> · diag every <input id="gw_ev" value="20" style="width:34px"> · <b>train N</b> <input id="gw_nsamp" value="500" style="width:46px"> · <b>test N</b> <input id="gw_nte" value="200" style="width:46px"> · <b title="Minibatch size for the ⑤–⑨ intervention UPDATE (0 = full batch). Diagnostics (loss/acc/ratio/PS/align) always measure on the full train set. ⑨'s random-search run stays full-batch.">batch</b> <input id="gw_batch" value="0" style="width:34px" title="0 = full batch; >0 = minibatch size for the grok-⑤–⑨ update step"> &nbsp;·&nbsp; ⑨: subspace K <input id="gw9K" value="8" style="width:34px"> · refresh <input id="gw9refresh" value="20" style="width:34px"> · #tries <input id="gw9try" value="8" style="width:30px"></span>
   <span style="display:block;font-size:12px;color:#475569;margin:2px 0"> intervention init scale σ (θ=σ·θ₀; 1 = the main run, the default; ⑤ sweeps init itself): ⑥ <input id="gw6init" value="1" style="width:40px"> · ⑦ <input id="gw7init" value="1" style="width:40px"> · ⑧ <input id="gw8init" value="1" style="width:40px"> · ⑨ <input id="gw9init" value="1" style="width:40px"></span>
   <label title="§6 — 3D subspace projection of six ∇θ gradient-vectors over a sliding [t−50,t+50] window. Six per-step p-dim vectors: ∇‖f‖², ∇‖r‖², ∇‖J‖²_F, ∇‖∇L‖², and the two DISCRETE step-difference ones ∇‖ṙ‖²=−2Jᵀ(r_t−r_{t−1}) & ∇‖J̇‖²_F=∇‖J‖²_F−2∇⟨J,J_{t−1}⟩_F. For each iteration t, stack a metric's window vectors (p×W, W≤101, clipped at the ends), take the top-3 LEFT singular directions, and project the t-th vector onto them → one 3D point; the curve over t is coloured by iteration (Viridis: dark=early → yellow=late). Panels 1-2 (per-metric subspace, {f,r,J} & {g,ṙ,J̇}); panels 3-4 (COMMON subspace = top-3 of all six metrics stacked, p×6W; same metric split). Because the +50 half-window needs FUTURE iterations, §27 streams with a 50-STEP LAG (iteration t emitted at step t+50; trailing 50 flushed at end). GPU backend, small N/p; off in surrogate mode; eig-every=1."><input type="checkbox" id="en35" checked> 7 · ∇θ-vector 3D subspace projection (sliding window)</label>
@@ -866,6 +870,40 @@ Each line “$i\!\cdot\!j$” is $\cos\angle(\text{vector }i,\text{vector }j)\in
 <p class="cap">The <b>same three panels</b> as grok-⑤–⑨, but the sweep axis is the <b>loss function</b> — from one init, one run per loss, trained with the <b>main run's lr + weight decay</b> (so only the loss changes). Colour = regime by the ratio $\ell''/\ell'$: <b style="color:#1e3a8a">erf-integral</b> · <b style="color:#2563eb">log-cosh</b> · <b style="color:#60a5fa">pseudo-Huber</b> (shades of <b>blue = rich/feature</b>, $\ell''$ decays faster than $\ell'$) · <b style="color:#dc2626">e<sup>r²</sup>−1</b> (growth, $\ell''>0$) · <b style="color:#f87171">Welsch 1−e<sup>−r²</sup></b> · <b style="color:#991b1b">1−e<sup>−r⁴</sup></b> (redescending, $\ell''<0$ tail) — <b>shades of red = lazy/kernel</b> ($\ell''/\ell'\!\to\infty$) · <b style="color:#000">MSE</b> (black, reference) · <b style="color:#9ca3af">CE</b> (grey, binary-logistic). The <b>ratio panel is loss-consistent</b>: $\rho=|g^\top M g|/|g^\top G g|$ with $M=\sum_k\ell'_k Q_k$, $G=J^\top\mathrm{diag}(\ell'')J$, $g=\sum_k\ell'_k\nabla f_k$ (reduces to the usual $|g^\top M_r g|/g^\top J^\top J g$ for MSE). <b>Panel 1</b> = test/train loss &amp; accuracy; <b>Panel 2</b> = ratio / signed 2nd−1st curvature diff / PS / alignment; <b>Panel 3</b> = residual↔NTK eigenvector pairs. Fires once when enabled. init σ <input id="gw11init" value="1" style="width:34px"> (θ=σ·θ₀). &nbsp;<label style="font-weight:600;color:#6d28d9"><input type="checkbox" id="gw11overlay" onchange="if(_GW11_LAST)grokRenderExp('gw11',_GW11_LAST,false)"> overlay train/test</label> <span style="color:#94a3b8;font-size:11px">(train solid + test dotted on the loss/acc plots — the gap = memorization)</span></p>
 <div class="plotrow row4"><div id="p_gw11_lte" class="plot" style="height:250px"></div><div id="p_gw11_ltr" class="plot" style="height:250px"></div><div id="p_gw11_ate" class="plot" style="height:250px"></div><div id="p_gw11_atr" class="plot" style="height:250px"></div></div>
 <div class="plotrow row4"><div id="p_gw11_ratio" class="plot" style="height:250px"></div><div id="p_gw11_mrgn" class="plot" style="height:250px"></div><div id="p_gw11_ps" class="plot" style="height:250px"></div><div id="p_gw11_align" class="plot" style="height:250px"></div></div><h3 style="margin:8px 0 2px;font-size:13px;color:#475569">Panel 3 — residual ↔ NTK eigenvector PAIRS: |P<sub>span(u₂,u₃)</sub>r|/‖r‖ · (u₄,u₅) · (u₆,u₇) · (u₈,u₉)</h3><div class="plotrow row4"><div id="p_gw11_jr23" class="plot" style="height:250px"></div><div id="p_gw11_jr45" class="plot" style="height:250px"></div><div id="p_gw11_jr67" class="plot" style="height:250px"></div><div id="p_gw11_jr89" class="plot" style="height:250px"></div></div>
+</div>
+
+<div id="sec_gw12" style="border:2px solid #b91c1c;border-radius:8px;padding:6px 14px 12px;margin:6px 0 18px;background:#fef2f2;display:none">
+<h2 style="color:#b91c1c;margin-top:4px">★grok-⑫ · GD vs SGD (batch-size sweep) <span id="gw12_cap" style="font-size:12px;color:#6b7280;font-weight:400"></span></h2>
+<p class="cap">The <b>same three panels</b> as grok-⑤–⑨ plus a new <b>Panel 4</b>, swept over the <b>minibatch size</b>: batch ∈ {1, 2, 4, …, 512 (&lt; full), full-batch GD}, from one init at the main lr (<b>no weight decay</b>). <b>Every statistic is measured on the FULL batch</b> even for the SGD runs — only the θ-update uses the minibatch. Colour = <b style="color:#dc2626">red</b> (batch=1) → <b style="color:#2563eb">blue</b> (full-batch). <b>Panel 1</b> = test/train loss &amp; accuracy; <b>Panel 2</b> = ratio |gᵀM_rg|/|gᵀJJᵀg| / signed 2nd−1st curvature / PS / alignment; <b>Panel 3</b> = residual↔NTK eigenvector pairs; <b>Panel 4</b> = |cos(Q_r eigenvector, Jᵀr)| for the top-4 ⊕ bottom-4 eigenvectors of Q_r=M_r=Σ<sub>k</sub>r<sub>k</sub>Q<sub>k</sub> (g=Jᵀr). Fires once when enabled. init σ <input id="gw12init" value="1" style="width:34px"> (θ=σ·θ₀).</p>
+<div class="plotrow row4"><div id="p_gw12_lte" class="plot" style="height:250px"></div><div id="p_gw12_ltr" class="plot" style="height:250px"></div><div id="p_gw12_ate" class="plot" style="height:250px"></div><div id="p_gw12_atr" class="plot" style="height:250px"></div></div>
+<div class="plotrow row4"><div id="p_gw12_ratio" class="plot" style="height:250px"></div><div id="p_gw12_mrgn" class="plot" style="height:250px"></div><div id="p_gw12_ps" class="plot" style="height:250px"></div><div id="p_gw12_align" class="plot" style="height:250px"></div></div>
+<h3 style="margin:8px 0 2px;font-size:13px;color:#475569">Panel 3 — residual ↔ NTK eigenvector PAIRS: |P<sub>span(u₂,u₃)</sub>r|/‖r‖ · (u₄,u₅) · (u₆,u₇) · (u₈,u₉)</h3>
+<div class="plotrow row4"><div id="p_gw12_jr23" class="plot" style="height:250px"></div><div id="p_gw12_jr45" class="plot" style="height:250px"></div><div id="p_gw12_jr67" class="plot" style="height:250px"></div><div id="p_gw12_jr89" class="plot" style="height:250px"></div></div>
+<h3 style="margin:8px 0 2px;font-size:13px;color:#475569">Panel 4 — |cos(Q_r eigenvector, Jᵀr)| vs iter · top-1(—)/top-2(··) · top-3(—)/top-4(··) · bottom-1(—)/bottom-2(··) · bottom-3(—)/bottom-4(··)</h3>
+<div class="plotrow row4"><div id="p_gw12_mrt12" class="plot" style="height:250px"></div><div id="p_gw12_mrt34" class="plot" style="height:250px"></div><div id="p_gw12_mrb12" class="plot" style="height:250px"></div><div id="p_gw12_mrb34" class="plot" style="height:250px"></div></div>
+</div>
+
+<div id="sec_gw13" style="border:2px solid #7e22ce;border-radius:8px;padding:6px 14px 12px;margin:6px 0 18px;background:#faf5ff;display:none">
+<h2 style="color:#7e22ce;margin-top:4px">★grok-⑬ · Momentum × batch size <span id="gw13_cap" style="font-size:12px;color:#6b7280;font-weight:400"></span></h2>
+<p class="cap">The <b>same four panels</b> as grok-⑫, but the sweep axis is the <b>momentum μ</b> (heavy-ball, <b>no weight decay</b>): μ ∈ {0, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99, 1.0}. Each is run at four batch sizes — <b>full-batch, full//2, full//4, full//8</b> — to read the joint effect of momentum and SGD; pick which with the dropdown. <b>Every statistic is on the FULL batch.</b> Colour = <b style="color:#dc2626">red</b> (μ=0) → <b style="color:#2563eb">blue</b> (μ=1). Panels: same as grok-⑫. init σ <input id="gw13init" value="1" style="width:34px"> (θ=σ·θ₀). &nbsp;<label style="font-weight:600;color:#7e22ce">batch size <select id="gw13bs" onchange="if(_GW13_LAST)renderGw13(_GW13_LAST)"></select></label></p>
+<div class="plotrow row4"><div id="p_gw13_lte" class="plot" style="height:250px"></div><div id="p_gw13_ltr" class="plot" style="height:250px"></div><div id="p_gw13_ate" class="plot" style="height:250px"></div><div id="p_gw13_atr" class="plot" style="height:250px"></div></div>
+<div class="plotrow row4"><div id="p_gw13_ratio" class="plot" style="height:250px"></div><div id="p_gw13_mrgn" class="plot" style="height:250px"></div><div id="p_gw13_ps" class="plot" style="height:250px"></div><div id="p_gw13_align" class="plot" style="height:250px"></div></div>
+<h3 style="margin:8px 0 2px;font-size:13px;color:#475569">Panel 3 — residual ↔ NTK eigenvector PAIRS: |P<sub>span(u₂,u₃)</sub>r|/‖r‖ · (u₄,u₅) · (u₆,u₇) · (u₈,u₉)</h3>
+<div class="plotrow row4"><div id="p_gw13_jr23" class="plot" style="height:250px"></div><div id="p_gw13_jr45" class="plot" style="height:250px"></div><div id="p_gw13_jr67" class="plot" style="height:250px"></div><div id="p_gw13_jr89" class="plot" style="height:250px"></div></div>
+<h3 style="margin:8px 0 2px;font-size:13px;color:#475569">Panel 4 — |cos(Q_r eigenvector, Jᵀr)| vs iter · top-1(—)/top-2(··) · top-3(—)/top-4(··) · bottom-1(—)/bottom-2(··) · bottom-3(—)/bottom-4(··)</h3>
+<div class="plotrow row4"><div id="p_gw13_mrt12" class="plot" style="height:250px"></div><div id="p_gw13_mrt34" class="plot" style="height:250px"></div><div id="p_gw13_mrb12" class="plot" style="height:250px"></div><div id="p_gw13_mrb34" class="plot" style="height:250px"></div></div>
+</div>
+
+<div id="sec_gw14" style="border:2px solid #0e7490;border-radius:8px;padding:6px 14px 12px;margin:6px 0 18px;background:#ecfeff;display:none">
+<h2 style="color:#0e7490;margin-top:4px">★grok-⑭ · Generalization gap ↔ init curvature <span id="gw14_cap" style="font-size:12px;color:#6b7280;font-weight:400"></span></h2>
+<p class="cap">Does generalization correlate with the init-time curvature quantity being large? For each init std <b>σ</b> (swept very small → large; mean-0 iid Gaussian init θ∼N(0,σ)) we run many <b>random seeds</b>, each trained <b>2k iterations</b> (full-batch GD, main lr, <b>no weight decay</b>) on the same train/test set. <b>Each point = one seed.</b> <b>y</b> = Σ<sub>t</sub>(L<sub>test</sub>−L<sub>train</sub>) over all iterations (larger = worse generalization). <b>x</b> at <b>t=0</b>: left plot of each pair = gᵀM_rg − gᵀJJᵀg, right = gᵀM_rg ÷ gᵀJJᵀg (signed, no |·|), with g=Jᵀr, M_r=Σ<sub>k</sub>r<sub>k</sub>Q<sub>k</sub>. Pearson <b>r</b> shown in each title. 3 panels × 2 σ = 6 σ (12 scatter plots).</p>
+<div style="margin:2px 0 6px;font-size:12px"><b style="color:#0e7490">axis scale:</b> &nbsp;<label style="font-weight:600;color:#0e7490"><input type="checkbox" id="gw14xlog" checked onchange="if(_GW14_LAST)renderGw14(_GW14_LAST)"> x log</label> &nbsp; <label style="font-weight:600;color:#0e7490"><input type="checkbox" id="gw14ylog" onchange="if(_GW14_LAST)renderGw14(_GW14_LAST)"> y log</label> &nbsp;<span style="color:#94a3b8;font-size:11px">(log = signed-log₁₀(1+|·|); unchecked = raw value. r is computed on the displayed axes.)</span></div>
+<h3 style="margin:8px 0 2px;font-size:13px;color:#475569">Panel 1 — smallest σ</h3>
+<div class="plotrow row4"><div id="p_gw14_s0_d" class="plot" style="height:270px"></div><div id="p_gw14_s0_r" class="plot" style="height:270px"></div><div id="p_gw14_s1_d" class="plot" style="height:270px"></div><div id="p_gw14_s1_r" class="plot" style="height:270px"></div></div>
+<h3 style="margin:8px 0 2px;font-size:13px;color:#475569">Panel 2 — moderate σ</h3>
+<div class="plotrow row4"><div id="p_gw14_s2_d" class="plot" style="height:270px"></div><div id="p_gw14_s2_r" class="plot" style="height:270px"></div><div id="p_gw14_s3_d" class="plot" style="height:270px"></div><div id="p_gw14_s3_r" class="plot" style="height:270px"></div></div>
+<h3 style="margin:8px 0 2px;font-size:13px;color:#475569">Panel 3 — largest σ</h3>
+<div class="plotrow row4"><div id="p_gw14_s4_d" class="plot" style="height:270px"></div><div id="p_gw14_s4_r" class="plot" style="height:270px"></div><div id="p_gw14_s5_d" class="plot" style="height:270px"></div><div id="p_gw14_s5_r" class="plot" style="height:270px"></div></div>
 </div>
 
 <div id="sec_s27" style="display:none">
@@ -3875,6 +3913,9 @@ function toggleGw8(){_gwToggle('gw8','engw8');}
 function toggleGw9(){_gwToggle('gw9','engw9');}
 function toggleGw10(){_gwToggle('gw10','engw10');if(document.getElementById('engw10').checked){gw10BuildPlots();requestAnimationFrame(()=>{for(const id of _gw10PlotIds()){const g=document.getElementById(id);if(g&&g._fullLayout){try{Plotly.Plots.resize(g);}catch(e){}}}});}}
 function toggleGw11(){_gwToggle('gw11','engw11');}
+function toggleGw12(){_gwToggle('gw12','engw12');}
+function toggleGw13(){_gwToggle('gw13','engw13');}
+function toggleGw14(){_gwToggle('gw14','engw14');}
 // grok-⑩ has 3 blocks (k∈{1,3,5}) × [Panel1: ltr/lte/atr/ate] × [Panel2: al1..al4] = 24 plots, built into #gw10_blocks.
 const GW10_KS=[1,3,5];
 const GW10_RUNCOL={top:'#0f9d8f',bottom:'#dc2626',null:'#7c3aed',rand:'#d97706'};
@@ -3960,6 +4001,8 @@ function _gwColors(n){
   const CAT=['#2563eb','#dc2626','#16a34a','#d97706','#7c3aed','#0891b2','#db2777','#65a30d','#ea580c','#0d9488','#9333ea','#ca8a04'];
   if(n<=CAT.length){return CAT.slice(0,n);}
   const out=[];for(let i=0;i<n;i++){const t=n>1?i/(n-1):0;out.push('rgb('+Math.round(30+215*t)+','+Math.round(90+60*Math.sin(Math.PI*t))+','+Math.round(210-170*t)+')');}return out;}
+function _redBlue(n){   // ★grok-⑫/⑬ label gradient: index 0 = red (small batch / μ=0) → last = blue (full-batch / μ=1)
+  const out=[];for(let i=0;i<n;i++){const t=n>1?i/(n-1):0;out.push('rgb('+Math.round(214-177*t)+','+Math.round(40+59*t)+','+Math.round(40+195*t)+')');}return out;}
 function _gwExpLayout(title,ytitle,logY,yr){const L=baseLayout(title,ytitle,logY);L.showlegend=true;L.legend={font:{size:8},orientation:'h',x:0,y:-0.22,yanchor:'top'};L.margin={l:52,r:10,t:30,b:62};L.title.font={size:11};L.title.y=0.99;L.title.yanchor='top';if(yr)L.yaxis.range=yr;return L;}
 // Render one intervention panel (pfx='gw5'..'gw8'); data={axis,runs:[{x|name,it,ltr,lte,atr,ate,ps,align,ratio,grokIt}]}
 // ★ ONE common, CLICKABLE legend at the top of a grok panel (replaces the per-plot legends). Clicking an item
@@ -3987,7 +4030,7 @@ function _commonLegend(pfx,series,header,plots,tracesFor){
 }
 var _GW11_LAST=null;   // ★grok-⑪ last payload — lets the 'overlay train/test' toggle redraw without new data
 function grokRenderExp(pfx,data,isCE){
-  if(!data||!data.runs||!data.runs.length)return; const R=data.runs; const cols=_gwColors(R.length);
+  if(!data||!data.runs||!data.runs.length)return; const R=data.runs; const cols=(pfx==='gw12'||pfx==='gw13')?_redBlue(R.length):_gwColors(R.length);   // ★grok-⑫/⑬: red (small batch / μ=0) → blue (full-batch / μ=1)
   const lab=r=>r.name!==undefined?r.name:(''+(Math.round(r.x*1000)/1000));
   // per-run colour index (r.cidx) + dash (r.dash) let grok-⑥ draw each α's unscaled·lr×α BASELINE in the SAME colour, dotted
   const _lv=_gwLegVis[pfx]||(_gwLegVis[pfx]=[]);   // per-run on/off from the common legend (persists across streaming re-renders)
@@ -3998,8 +4041,9 @@ function grokRenderExp(pfx,data,isCE){
   const ssuf=(data.sigma!=null)?`  · init σ=${(+data.sigma).toPrecision(3)} · lr=${_lrv}`:`  · lr=${_lrv}`;   // ★ σ (init scale θ=σ·θ₀) + lr on every plot title (gw5 sweeps σ ⇒ per-run σ in the legend, lr shown here)
   const tsuf=_tsuf+ssuf;
   // ★ ONE common, clickable legend on top (per-plot legends OFF; click toggles a run across all plots)
+  const _p4ids=(pfx==='gw12'||pfx==='gw13')?['mrt12','mrt34','mrb12','mrb34'].map(x=>'p_'+pfx+'_'+x):[];   // ★grok-⑫/⑬ Panel-4 plots have 2 traces per run (solid+dotted) ⇒ legend toggles both
   _commonLegend(pfx,R.map((r,i)=>({name:lab(r),color:(r.color||cols[(r.cidx!==undefined?r.cidx:i)]),dash:(r.dash||'solid')})),(data.sigma!=null?('init σ='+(+data.sigma).toPrecision(3)):''),
-    ['lte','ltr','ate','atr','ratio','mrgn','ps','align','jr23','jr45','jr67','jr89'].map(x=>'p_'+pfx+'_'+x),(i)=>[i]);
+    ['lte','ltr','ate','atr','ratio','mrgn','ps','align','jr23','jr45','jr67','jr89'].map(x=>'p_'+pfx+'_'+x).concat(_p4ids),(i,pid)=>(_p4ids.indexOf(pid)>=0?[2*i,2*i+1]:[i]));
   const P=(id,key,title,yl,yr)=>{try{const L=_gwExpLayout(title+tsuf,yl,false,yr);L.showlegend=false;L.margin=Object.assign({},L.margin,{b:34});Plotly.react('p_'+pfx+'_'+id,tr(key),L);}catch(e){}};
   // Row 1 — losses & accuracies (grokking): test loss, train loss, test accuracy, train accuracy
   P('lte','lte','test loss vs iter','test loss');
@@ -4033,10 +4077,61 @@ function grokRenderExp(pfx,data,isCE){
   P('jr45','jr45','r ↔ NTK u₄,u₅ vs iter','|P₍u₄,u₅₎r|/‖r‖',[0,1.02]);
   P('jr67','jr67','r ↔ NTK u₆,u₇ vs iter','|P₍u₆,u₇₎r|/‖r‖',[0,1.02]);
   P('jr89','jr89','r ↔ NTK u₈,u₉ vs iter','|P₍u₈,u₉₎r|/‖r‖',[0,1.02]);
+  // ★grok-⑫/⑬ Panel 4 — |cos(Q_r eigenvector, Jᵀr)|: per run TWO traces (solid = 1st direction, dotted = 2nd)
+  if(pfx==='gw12'||pfx==='gw13'){
+    const pTr=(ka,kb)=>{const t=[];R.forEach((r,i)=>{const c=(r.color||cols[(r.cidx!==undefined?r.cidx:i)]),v=(_lv[i]===false?'legendonly':true);
+      t.push({x:r.it,y:r[ka],mode:'lines',name:lab(r),line:{color:c,width:2},connectgaps:false,visible:v});
+      t.push({x:r.it,y:r[kb],mode:'lines',name:lab(r)+' (2)',line:{color:c,width:1.5,dash:'dot'},connectgaps:false,visible:v});});return t;};
+    const pP=(id,ka,kb,title)=>{try{const L=_gwExpLayout(title+tsuf,'|cos|',false,[0,1.02]);L.showlegend=false;L.margin=Object.assign({},L.margin,{b:34});Plotly.react('p_'+pfx+'_'+id,pTr(ka,kb),L);}catch(e){}};
+    pP('mrt12','mr_t1','mr_t2','Q_r top-1(—) & top-2(··) ↔ Jᵀr');
+    pP('mrt34','mr_t3','mr_t4','Q_r top-3(—) & top-4(··) ↔ Jᵀr');
+    pP('mrb12','mr_b1','mr_b2','Q_r bottom-1(—) & bottom-2(··) ↔ Jᵀr');
+    pP('mrb34','mr_b3','mr_b4','Q_r bottom-3(—) & bottom-4(··) ↔ Jᵀr');
+  }
   const cap=document.getElementById(pfx+'_cap');
   if(cap){const gk=R.map(r=>r.grokIt).filter(v=>v!=null);
     const _rl=data.rule?({star:'⋆ mult=1−sign·λ·tanh(M_r-curv/‖·‖ema)∈(1−|λ|,1+|λ|) — always descends',taylor:'η²λ Taylor'}[data.rule]||data.rule):null;
     cap.textContent='· '+R.length+' runs'+(_rl?(' · rule='+_rl+' ('+data.sign+')'):'')+(data.layer?(' · '+data.layer):'')+(data.mode?(' · '+data.mode):'')+(gk.length?(' · fastest grok @ it='+Math.min.apply(null,gk)):' · none reached test-acc>0.7 in the run');}
+}
+var _GW13_LAST=null;   // ★grok-⑬ last payload — the batch-size dropdown re-renders from it (bybs holds all 4 batch sizes' μ-sweeps)
+function renderGw13(g){
+  if(!g||!g.bybs||!g.bslist||!g.bslist.length)return; _GW13_LAST=g;
+  const sel=document.getElementById('gw13bs');
+  if(sel){const want=g.bslist.join(',');
+    if(sel._filled!==want){const cur=sel.value;   // (re)populate the batch-size dropdown once per bslist
+      sel.innerHTML=g.bslist.map((b,i)=>`<option value="${b}">${i===0?('full-batch ('+b+')'):('BS='+b)}</option>`).join('');
+      sel._filled=want; if(cur&&g.bslist.map(String).indexOf(cur)>=0)sel.value=cur;}}
+  const key=(sel&&sel.value)||String(g.bslist[0]);
+  const grp=g.bybs[key]||g.bybs[String(g.bslist[0])];
+  if(grp&&grp.runs)grokRenderExp('gw13',{runs:grp.runs,sigma:g.sigma,axis:g.axis},false);   // delegate the 4-panel render to the shared grok renderer (μ-sweep of the selected batch size)
+}
+var _GW14_LAST=null;   // ★grok-⑭ last payload
+function _pearson(xs,ys){const n=xs.length;if(n<3)return null;let sx=0,sy=0;for(let i=0;i<n;i++){sx+=xs[i];sy+=ys[i];}const mx=sx/n,my=sy/n;let sxy=0,sxx=0,syy=0;for(let i=0;i<n;i++){const dx=xs[i]-mx,dy=ys[i]-my;sxy+=dx*dy;sxx+=dx*dx;syy+=dy*dy;}const d=Math.sqrt(sxx*syy);return d>0?sxy/d:null;}
+function _linfit(xs,ys){   // OLS best-fit y=a+b·x + Pearson r (from the same sums) — the correlation curve overlaid on each scatter
+  const n=xs.length;if(n<2)return null;let sx=0,sy=0;for(let i=0;i<n;i++){sx+=xs[i];sy+=ys[i];}const mx=sx/n,my=sy/n;
+  let sxy=0,sxx=0,syy=0;for(let i=0;i<n;i++){const dx=xs[i]-mx,dy=ys[i]-my;sxy+=dx*dy;sxx+=dx*dx;syy+=dy*dy;}
+  if(!(sxx>0))return null;const b=sxy/sxx,a=my-b*mx,r=(sxx*syy>0)?sxy/Math.sqrt(sxx*syy):null;return {a:a,b:b,r:r};}
+function renderGw14(g){   // ★grok-⑭ generalization-gap ↔ init-curvature scatter: 6 σ × 2 plots (x=diff / x=ratio), y=Σ(L_test−L_train); Pearson r in each title; x/y log toggles
+  if(!g||!g.bysigma||!g.sigmas)return; _GW14_LAST=g;
+  const xlog=((document.getElementById('gw14xlog')||{checked:true}).checked)!==false;   // x log toggle (default ON — the diff spans ~14 orders of magnitude)
+  const ylog=((document.getElementById('gw14ylog')||{}).checked)===true;                // y log toggle (default OFF)
+  const slog=v=>(v==null||!isFinite(v))?null:Math.sign(v)*Math.log10(1+Math.abs(v));      // signed-log (keeps sign; handles ±/huge ranges)
+  const tx=v=>xlog?slog(v):v, ty=v=>ylog?slog(v):v;
+  const ylab=ylog?'sgn·log₁₀(1+|Σ(L_test−L_train)|)':'Σ(L_test−L_train)';
+  const mk=(id,xs,ys,xlab,sg)=>{const gd=document.getElementById(id);if(!gd)return;const f=_linfit(xs,ys);const r=f?f.r:null;
+    const L=baseLayout('σ='+(+sg).toPrecision(2)+' · '+xlab+(r!=null?('  · r='+r.toFixed(2)):'  · r=—'),ylab,false);
+    L.showlegend=false;L.margin={l:58,r:12,t:30,b:44};if(L.title)L.title.font={size:10};if(L.xaxis)L.xaxis.title={text:xlab,font:{size:9}};
+    const traces=[{x:xs,y:ys,mode:'markers',marker:{size:6,color:'#0e7490',opacity:0.72,line:{width:0.5,color:'#155e75'}},hoverinfo:'x+y'}];
+    if(f&&xs.length>=2){let xmin=xs[0],xmax=xs[0];for(let k=1;k<xs.length;k++){if(xs[k]<xmin)xmin=xs[k];if(xs[k]>xmax)xmax=xs[k];}   // OLS best-fit line across the x-range = the correlation curve
+      traces.push({x:[xmin,xmax],y:[f.a+f.b*xmin,f.a+f.b*xmax],mode:'lines',line:{color:'#dc2626',width:1.7},hoverinfo:'skip'});}
+    try{Plotly.react(id,traces,L);}catch(e){}};
+  const xdRaw='gᵀM_rg−gᵀJJᵀg', xrRaw='gᵀM_rg÷gᵀJJᵀg';
+  const xdlab=xlog?('x=sgn·log₁₀(1+|'+xdRaw+'|)'):('x='+xdRaw), xrlab=xlog?('x=sgn·log₁₀(1+|'+xrRaw+'|)'):('x='+xrRaw);
+  for(let i=0;i<g.sigmas.length;i++){const grp=g.bysigma[String(i)];if(!grp)continue;const pts=grp.points||[];const sg=grp.sigma;
+    const fd=pts.filter(p=>isFinite(p.xd)&&isFinite(p.y)); const fr=pts.filter(p=>p.xr!=null&&isFinite(p.xr)&&isFinite(p.y));
+    mk('p_gw14_s'+i+'_d',fd.map(p=>tx(p.xd)),fd.map(p=>ty(p.y)),xdlab,sg);
+    mk('p_gw14_s'+i+'_r',fr.map(p=>tx(p.xr)),fr.map(p=>ty(p.y)),xrlab,sg);}
+  const cap=document.getElementById('gw14_cap');if(cap){let tot=0;for(let i=0;i<g.sigmas.length;i++){const grp=g.bysigma[String(i)];if(grp)tot+=(grp.points||[]).length;}cap.textContent='· '+tot+' seed runs · '+(g.steps||'?')+' iters each';}
 }
 function _ensureS6f(){const cb=document.getElementById('enS6f');if(cb&&!cb.checked)cb.checked=true;
   const el=document.getElementById('sec_s6f');const wasHidden=el&&getComputedStyle(el).display==='none';if(wasHidden)el.style.display='block';
@@ -4399,7 +4494,7 @@ function resizeAllPlots(){
     if(gd&&gd._fullLayout&&gd.offsetParent!==null){try{Plotly.Plots.resize(gd);}catch(e){}}});
   requestAnimationFrame(go); setTimeout(go,60);
 }
-window.addEventListener('resize',()=>{if(typeof PLOT_IDS!=='undefined')resizeAllPlots();});
+window.addEventListener('resize',()=>{if(typeof Plotly!=='undefined')resizeAllPlots();});   // resizeAllPlots iterates all div.plot generically (no longer needs PLOT_IDS); gate on Plotly being loaded
 
 // ===================== master time-scrubber =====================
 // One slider rewinds EVERY time-series plot together (x = GD step / §16 iteration), so you can replay how the
@@ -4668,10 +4763,12 @@ function pushPoint(t,D,n,kth,nResid){
   if(D.g_gw1){const P=D.g_gw1.pts;const slog=v=>Math.sign(v)*Math.log10(1+Math.abs(v));const col=P.map(p=>slog(p.col));const tx=P.map(p=>'σ='+p.s.toExponential(1));
     for(const[id,k]of[['p_gw1_1','a1'],['p_gw1_2','a2'],['p_gw1_3','a3']]){const xs=P.map(p=>p[k]),ys=P.map(p=>p.dJ);try{Plotly.restyle(id,{x:[xs],y:[ys],'marker.color':[col],text:[tx]},[0]);}catch(e){}}}
   // ★grok-⑤⑥⑦⑧ intervention sweeps (one-shot). isCE detected from the data (test-accuracy present ⇒ classification).
-  for(const[key,pfx]of[['g_gw5','gw5'],['g_gw6','gw6'],['g_gw7','gw7'],['g_gw8','gw8'],['g_gw9','gw9'],['g_gw11','gw11']]){
+  for(const[key,pfx]of[['g_gw5','gw5'],['g_gw6','gw6'],['g_gw7','gw7'],['g_gw8','gw8'],['g_gw9','gw9'],['g_gw11','gw11'],['g_gw12','gw12']]){
     if(D[key]){const dd=D[key];const isCE=dd.runs&&dd.runs.some(r=>r.ate&&r.ate.some(v=>v!=null));try{grokRenderExp(pfx,dd,isCE);}catch(e){}}}
   if(D.g_gw10)renderGw10(D.g_gw10);   // ★grok-⑩ (also driven live via type:'gwstream' — see gpuHandle)
   if(D.g_gw3p0)renderGw3p0(D.g_gw3p0);   // ★grok-③ Panel-0 (also live via type:'gwstream')
+  if(D.g_gw13)renderGw13(D.g_gw13);   // ★grok-⑬ momentum × batch grid (dropdown-driven; also live via gwstream)
+  if(D.g_gw14)renderGw14(D.g_gw14);   // ★grok-⑭ gen-gap ↔ init-curvature scatter (also live via gwstream)
   if(OPT.s35&&D.g27){applyG27(D.g27.pts);}   // §27 — accumulate this step's finalized iteration-point(s) into the 12 3D curves
   if(OPT.s35&&D.g27x){const gx=D.g27x,tt=gx.t,c=gx.cos||[],nm=gx.norm||[],cP=gx.cosP||[],nmP=gx.normP||[];   // §7 Panel 3 — per-step cosines + norms (time-series, scrubs with the master bar)
     if(c.length>=4)extP('p_s27x_cos',{x:[[tt],[tt],[tt],[tt]],y:[[c[0]],[c[1]],[c[2]],[c[3]]]},[0,1,2,3]);
@@ -5838,6 +5935,9 @@ function currentQueryParams(){   // the exact query-style param dict the backend
    o['gw9']=chk('engw9')?'1':'0'; o['gw9K']=gv('gw9K','8'); o['gw9refresh']=gv('gw9refresh','20'); o['gw9try']=gv('gw9try','8');
    o['gw10']=chk('engw10')?'1':'0'; o['gw10try']=gv('gw10try','16'); o['gw10init']=gv('gw10init','1');   // ★grok-⑩ subspace-traversal random-search
    o['gw11']=chk('engw11')?'1':'0'; o['gw11init']=gv('gw11init','1');   // ★grok-⑪ loss-function sweep
+   o['gw12']=chk('engw12')?'1':'0'; o['gw12init']=gv('gw12init','1');   // ★grok-⑫ GD vs SGD batch-size sweep
+   o['gw13']=chk('engw13')?'1':'0'; o['gw13init']=gv('gw13init','1');   // ★grok-⑬ momentum × batch grid
+   o['gw14']=chk('engw14')?'1':'0'; o['gw14seeds']=gv('gw14seeds','24'); o['gw14steps']=gv('gw14steps','2000');   // ★grok-⑭ gen-gap ↔ init-curvature correlation
    o['gw_n']=gv('gw_n','6'); o['gw_steps']=gv('gw_steps','600'); o['gw_ev']=gv('gw_ev','20'); o['gw_nsamp']=gv('gw_nsamp','500'); o['gw_nte']=gv('gw_nte','200'); o['gw_batch']=gv('gw_batch','0');
    o['gw6init']=gv('gw6init','1'); o['gw7init']=gv('gw7init','1'); o['gw8init']=gv('gw8init','1'); o['gw9init']=gv('gw9init','1'); o['gwdiaginit']=gv('gwdiaginit','1');}
   {const e=document.getElementById('qspeck');if(e)o['qspeck']=e.value||'40';}   // Q eigenspectrum
@@ -6120,6 +6220,8 @@ function gpuHandle(m,st,sp,finish,resuming){
     }else if(m.type==='gwstream'||m.type==='gwfinal'){   // ★grok-⑤–⑩ LIVE partials (gwstream, transient) + the TERMINAL payload (gwfinal, kept by the saved capture). Same renderers.
       try{ if(m.which==='gw10'){ renderGw10(m.payload); }
            else if(m.which==='gw3p0'){ renderGw3p0(m.payload); }
+           else if(m.which==='gw13'){ renderGw13(m.payload); }   // ★grok-⑬ dropdown-driven (bybs payload)
+           else if(m.which==='gw14'){ renderGw14(m.payload); }   // ★grok-⑭ scatter (bysigma payload)
            else { const isCE=m.payload&&m.payload.runs&&m.payload.runs.some(r=>r.ate&&r.ate.some(v=>v!=null)); grokRenderExp(m.which,m.payload,isCE); } }catch(e){}
     }else if(m.type==='g16'){ADV_GOT.en24=1;s16Push(m);
     }else if(m.type==='g17'){ADV_GOT.en25=1;s17Push(m);
@@ -7030,7 +7132,7 @@ function makeCompareSection(pre, kind) {
 }
 
 function reorderPredictionLayout(){   // base panels §1-6 on top, then Prediction-1&2 → 3 → 4 → 4.2(ray) → 5.1(trace) → 5.2(σ₁) → 6
-  const order=['sec_1','sec_2','sec_3','sec_slqH','sec_4','sec_s21','sec_s27','sec_eds','sec_ss','sec_qspec','sec_s6f','sec_gw1','sec_gw2','sec_gw3','sec_gw4','sec_gw5','sec_gw6','sec_gw7','sec_gw8','sec_gw9','sec_gw10','sec_gw11','sec_sweep','sec_pred3_box','sec_pred4_box','sec_predray','sec_trace','sec_pred','sec_pred6'];   // ★grok ①②③④ panels ride in the layout (kept, not force-hidden by the pred-off separation)   // sec_eds = Early-dynamics stats (NOT a prediction), ABOVE Prediction-1&2; sec_ss = Self-stabilization, right before Prediction-1&2; sec_predray = ★ Prediction 4.2 (ray), right after Prediction-4
+  const order=['sec_1','sec_2','sec_3','sec_slqH','sec_4','sec_s21','sec_s27','sec_eds','sec_ss','sec_qspec','sec_s6f','sec_gw1','sec_gw2','sec_gw3','sec_gw4','sec_gw5','sec_gw6','sec_gw7','sec_gw8','sec_gw9','sec_gw10','sec_gw11','sec_gw12','sec_gw13','sec_gw14','sec_sweep','sec_pred3_box','sec_pred4_box','sec_predray','sec_trace','sec_pred','sec_pred6'];   // ★grok ①②③④ panels ride in the layout (kept, not force-hidden by the pred-off separation)   // sec_eds = Early-dynamics stats (NOT a prediction), ABOVE Prediction-1&2; sec_ss = Self-stabilization, right before Prediction-1&2; sec_predray = ★ Prediction 4.2 (ray), right after Prediction-4
   const anchor=document.getElementById('sec_pred'); if(!anchor)return; const parent=anchor.parentNode; if(!parent)return;
   for(const id of order){const e=document.getElementById(id); if(e&&e.parentNode===parent)parent.insertBefore(e,anchor);}   // insert each before sec_pred (5.2 is the anchor)
   {const p6=document.getElementById('sec_pred6'); if(p6&&p6.parentNode===parent)parent.insertBefore(p6, anchor.nextSibling);}   // Prediction-6 goes AFTER 5.2 (sec_pred), so the numbering reads 1&2→3→4→5.1→5.2→6

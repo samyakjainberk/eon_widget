@@ -4386,9 +4386,12 @@ def _grok_heldout(dataset, Nte, inD, outD, seed, P):
     return None, None
 
 
-def _grok_diag(th, X, Y, Xte, Yte, N, Nte, outD, ce, psm=20):
+def _grok_diag(th, X, Y, Xte, Yte, N, Nte, outD, ce, psm=20, mr_pairs=False):
     """Per-checkpoint diagnostics for the intervention sweeps (uses the CURRENT _TL.model/_TL.loss, evolving Q).
-    Returns {ltr,lte,atr,ate,ps,align,ratio}. acc is None for regression (MSE)."""
+    Returns {ltr,lte,atr,ate,ps,align,ratio}. acc is None for regression (MSE).
+    mr_pairs (★grok-⑫ Panel-4): also return |cos(v_i, Jᵀr)| for v_i = the top-4 ⊕ bottom-4 eigenvectors of
+    Q_r=M_r=Σ_k r_kQ_k (eigenvectors sorted by SIGNED λ: top = most positive, bottom = most negative), as
+    mr_t1..mr_t4 / mr_b1..mr_b4 — the alignment of each extreme M_r direction with the gradient g=Jᵀr."""
     prevq = getattr(_TL, "qcfg", None); _TL.qcfg = None           # evolving M_r for these diagnostics
     try:
         p = _TL.model.p; M = N * outD
@@ -4468,8 +4471,26 @@ def _grok_diag(th, X, Y, Xte, Yte, N, Nte, outD, ce, psm=20):
             jr23, jr45, jr67, jr89 = _pair(2), _pair(4), _pair(6), _pair(8)
         except Exception:
             pass
+        # ---- ★grok-⑫/⑬ Panel-4: |cos(v_i, Jᵀr)| for the top-4 ⊕ bottom-4 eigenvectors v_i of Q_r=M_r=Σ_k r_kQ_k ----
+        #   (eigvecs from a matrix-free Lanczos on hvpS = M_r·v; sorted by SIGNED λ so top=most positive, bottom=most
+        #    negative). g=Jᵀr is the FULL-BATCH gradient direction (this whole diag runs on the full train set).
+        mrp = {}
+        if mr_pairs:
+            try:
+                gN = float(g.norm()) + 1e-30
+                Qb, Tm, km = _lanczos_core(lambda v: hvpS(th, X, v, rc), p, min(p, 48), 0, dt=DTYPE,
+                                           q0=_randvec16(p, SEC21_SEED))
+                mu, Sv = _safe_eigh(Tm); Qm = torch.stack(Qb); order = torch.argsort(mu, descending=True); ko = int(order.numel())
+                def _mrcos(idx):
+                    v = Sv[:, int(idx)].to(device=_dev(), dtype=DTYPE) @ Qm
+                    return abs(float(v @ g)) / ((float(v.norm()) + 1e-30) * gN)
+                for j in range(4):
+                    mrp["mr_t%d" % (j + 1)] = _mrcos(order[j]) if j < ko else None            # top-(j+1): most-positive λ
+                    mrp["mr_b%d" % (j + 1)] = _mrcos(order[ko - 1 - j]) if j < ko else None    # bottom-(j+1): most-negative λ
+            except Exception:
+                for j in range(4): mrp["mr_t%d" % (j + 1)] = None; mrp["mr_b%d" % (j + 1)] = None
         return {"ltr": ltr, "lte": lte, "atr": atr, "ate": ate, "ps": ps, "align": align, "ratio": ratio, "mrgn": mrgn,
-                "jr23": jr23, "jr45": jr45, "jr67": jr67, "jr89": jr89}
+                "jr23": jr23, "jr45": jr45, "jr67": jr67, "jr89": jr89, **mrp}
     finally:
         _TL.qcfg = prevq
 
@@ -4826,7 +4847,7 @@ def _gw3p0_iter(mode, th0, Xtr, Ytr, Xte, Yte, N, Nte, outD, steps, ev, lr, seed
 
 
 def _grok_train(th0, X, Y, Xte, Yte, steps, ev, N, Nte, outD, ce, step_fn, yscale_fn=None, lr=None,
-                batch=0, bseed=0, mk_step=None):
+                batch=0, bseed=0, mk_step=None, mr_pairs=False):
     """Run a SHORT training (step_fn advances one optimizer step) recording _grok_diag every `ev` steps.
     yscale_fn(t) -> scalar multiplier on the TARGETS (train + test) at step t: used by ⑥ output-scaling
     (the intervention scales the target labels Y, not the model) — plain GD on the scaled targets.
@@ -4837,17 +4858,22 @@ def _grok_train(th0, X, Y, Xte, Yte, steps, ev, N, Nte, outD, ce, step_fn, yscal
     if mk_step is None (e.g. ⑨ random-search, which needs the stable full objective) the full-batch step_fn
     is used unchanged. batch<=0 or batch>=N ⇒ ordinary full-batch (identical to before).
     Returns {it,ltr,lte,atr,ate,ps,align,ratio, grokIt} where grokIt = first it with test-acc>0.7 (or None)."""
-    rec = {k: [] for k in ("it", "ltr", "lte", "atr", "ate", "ps", "align", "ratio", "mrgn", "jr23", "jr45", "jr67", "jr89")}
-    for rec in _grok_train_iter(th0, X, Y, Xte, Yte, steps, ev, N, Nte, outD, ce, step_fn, yscale_fn, lr, batch, bseed, mk_step): pass
+    for rec in _grok_train_iter(th0, X, Y, Xte, Yte, steps, ev, N, Nte, outD, ce, step_fn, yscale_fn, lr, batch, bseed, mk_step, mr_pairs): pass
     return rec
 
 
+# ★grok-⑫/⑬ extra Panel-4 diagnostic keys (only recorded when mr_pairs=True)
+_MR_KEYS = ("mr_t1", "mr_t2", "mr_t3", "mr_t4", "mr_b1", "mr_b2", "mr_b3", "mr_b4")
+
+
 def _grok_train_iter(th0, X, Y, Xte, Yte, steps, ev, N, Nte, outD, ce, step_fn, yscale_fn=None, lr=None,
-                     batch=0, bseed=0, mk_step=None):
+                     batch=0, bseed=0, mk_step=None, mr_pairs=False):
     """GENERATOR form of _grok_train: yields the growing `rec` after each diagnostic tick so grok-⑤–⑨ can stream
-    LIVE. Same semantics as _grok_train otherwise; the last yielded rec (with grokIt) is complete."""
+    LIVE. Same semantics as _grok_train otherwise; the last yielded rec (with grokIt) is complete.
+    mr_pairs=True additionally records the ★grok-⑫/⑬ Panel-4 keys (M_r top/bottom-4 eigvec ↔ Jᵀr alignments)."""
     import numpy as _np
-    th = th0.clone(); rec = {k: [] for k in ("it", "ltr", "lte", "atr", "ate", "ps", "align", "ratio", "mrgn", "jr23", "jr45", "jr67", "jr89")}
+    _KEYS = ("ltr", "lte", "atr", "ate", "ps", "align", "ratio", "mrgn", "jr23", "jr45", "jr67", "jr89") + (_MR_KEYS if mr_pairs else ())
+    th = th0.clone(); rec = {k: [] for k in ("it",) + _KEYS}
     grokIt = None; Y0 = Y; Yte0 = Yte; rec["grokIt"] = None; _Lref = [None]   # running-min loss (divergence guard)
     use_mb = bool(batch) and 0 < int(batch) < N
     bs = int(batch)
@@ -4860,11 +4886,11 @@ def _grok_train_iter(th0, X, Y, Xte, Yte, steps, ev, N, Nte, outD, ce, step_fn, 
         Ytet = Yte0 if (yscale_fn is None or Yte0 is None) else (s * Yte0)
         if t % ev == 0 or t == steps:
             try:
-                d = _grok_diag(th, X, Yt, Xte, Ytet, N, Nte, outD, ce)   # DIAGNOSTICS: always full train set
+                d = _grok_diag(th, X, Yt, Xte, Ytet, N, Nte, outD, ce, mr_pairs=mr_pairs)   # DIAGNOSTICS: always full train set
             except Exception:
                 break
             rec["it"].append(t)
-            for k in ("ltr", "lte", "atr", "ate", "ps", "align", "ratio", "mrgn", "jr23", "jr45", "jr67", "jr89"): rec[k].append(d[k])
+            for k in _KEYS: rec[k].append(d.get(k))
             if grokIt is None and d["ate"] is not None and d["ate"] > 0.7: grokIt = t
             rec["grokIt"] = grokIt
             yield rec
@@ -4895,8 +4921,65 @@ def _grok_train_iter(th0, X, Y, Xte, Yte, steps, ev, N, Nte, outD, ce, step_fn, 
             th = nth
 
 
+def _gw14_initstats(th, X, Y, N, outD):
+    """★grok-⑭ init-time curvature at θ: (gᵀM_r g [SIGNED], gᵀJJᵀg) with g=Jᵀr, r=Y−f, M_r=Σ_k r_kQ_k, JJᵀ=NTK.
+    These are the two x-axes of the generalization-gap correlation scatter (measured once, at t=0)."""
+    M = N * outD
+    o = _TL.model.forward(th, X)
+    rr = (-N * _TL.loss.resid_cotangent(o, Y, N)).reshape(-1); r = rr[:M]; rc = r.reshape(N, outD)
+    if isinstance(_TL.model, MlpModel):
+        Jm = jac_cols(th, X)[0][:M]; g = Jm.t() @ r; Jg = Jm @ g; gJJg = float(Jg.pow(2).sum())
+    else:
+        g = _TL.model.vjp(th, X, rc)[0]
+        fp = _TL.model.forward(th + EPS * g, X); fm = _TL.model.forward(th - EPS * g, X)
+        Jg = ((fp - fm) / (2.0 * EPS)).reshape(-1)[:M]; gJJg = float((Jg ** 2).sum())
+    gMrgS = float(g @ hvpS(th, X, g, rc))     # gᵀM_r g (signed Rayleigh quotient of M_r=Σr_kQ_k along g=Jᵀr)
+    return gMrgS, gJJg
+
+
+def _gw14_run(th0, Xtr, Ytr, Xte, Yte, N, Nte, steps, lr):
+    """★grok-⑭ one seed: full-batch GD for `steps` iters (NO weight decay, main lr) → Σ_t (L_test − L_train) over ALL
+    iterations (generalization gap summed over training; large ⇒ worse generalization). Adaptive-lr divergence guard
+    keeps large-σ inits bounded (halve the step toward θ if the loss would blow past 8× its running min)."""
+    th = th0.clone(); gap = 0.0; Lref = None
+    for _t in range(steps):
+        with torch.no_grad():
+            ltr = float(_TL.loss.value(_TL.model.forward(th, Xtr), Ytr, N))
+            lte = float(_TL.loss.value(_TL.model.forward(th, Xte), Yte, Nte)) if Xte is not None else ltr
+        if ltr == ltr and lte == lte and abs(ltr) < 1e30 and abs(lte) < 1e30:
+            gap += (lte - ltr)
+        if Lref is None or (ltr == ltr and ltr < Lref): Lref = ltr
+        g = gradL(th, Xtr, Ytr)[0]; nth = th - lr * g
+        try:
+            ceil = 8.0 * max(Lref if Lref is not None else 1e-9, 1e-9) + 1e-9
+            for _ in range(9):
+                if torch.isfinite(nth).all():
+                    Lp = float(_TL.loss.value(_TL.model.forward(nth, Xtr), Ytr, N))
+                    if Lp == Lp and Lp <= ceil: break
+                nth = th + 0.5 * (nth - th)
+        except Exception:
+            pass
+        if not torch.isfinite(nth).all(): break
+        th = nth
+    return gap
+
+
 def _gd_step(X, Y, lr):
     return lambda th: th - lr * _opt_dir(_TL.model, gradL(th, X, Y)[0], "gd")
+
+
+def _mom_step(X, Y, lr, mom, st=None):
+    """★grok-⑬ heavy-ball momentum (PyTorch-SGD convention, NO weight decay): v←μ·v+∇L ; θ←θ−lr·v.
+    μ=0 ⇒ plain GD (identical to _gd_step); μ=1 ⇒ undamped (the _grok_train_iter divergence guard contains blowups).
+    The velocity buffer lives in `st` — pass a SHARED dict so v PERSISTS across the per-minibatch step REBUILDS in
+    _grok_train_iter (SGD+momentum: mk_step is re-called every step; without a shared buffer v would reset each step
+    ⇒ no momentum). st=None ⇒ a fresh per-call buffer (full-batch: the step is built ONCE per run)."""
+    st = st if st is not None else {"v": None}
+    def step(th):
+        g = gradL(th, X, Y)[0]
+        st["v"] = g if st["v"] is None else (mom * st["v"] + g)
+        return th - lr * st["v"]
+    return step
 
 
 def _gd_step_ramp(X, Y, lr0, alpha, T, st=None):
@@ -5160,6 +5243,13 @@ def run_stream(P):
     gw10init = float(P.get("gw10init", 1.0))     # ★grok-⑩ init-scale θ=gw10init·θ₀ (default 1 = main run's init)
     gw11 = int(P.get("gw11", 0))                 # ★grok-⑪ LOSS-FUNCTION sweep: log-cosh/erf-int/pseudo-Huber (rich·blue) · e^{r²}−1 (lazy·red) · MSE (black) · CE (grey); loss-consistent ratio
     gw11init = float(P.get("gw11init", 1.0))     # ★grok-⑪ init-scale θ=gw11init·θ₀ (default 1 = main run's init)
+    gw12 = int(P.get("gw12", 0))                 # ★grok-⑫ GD vs SGD: sweep minibatch size (1..512<N + full-batch); stats always full-batch; + Panel-4 M_r-eigvec↔Jᵀr
+    gw12init = float(P.get("gw12init", 1.0))     # ★grok-⑫ init-scale θ=gw12init·θ₀ (default 1 = main run's init)
+    gw13 = int(P.get("gw13", 0))                 # ★grok-⑬ effect of MOMENTUM: full-batch heavy-ball GD, sweep μ∈{0..1}; same 4 panels as ⑫
+    gw13init = float(P.get("gw13init", 1.0))     # ★grok-⑬ init-scale θ=gw13init·θ₀ (default 1 = main run's init)
+    gw14 = int(P.get("gw14", 0))                 # ★grok-⑭ generalization-gap ↔ init-curvature correlation: per σ, many-seed iid-N(0,σ) inits, scatter Σ(L_test−L_train) vs init gᵀM_rg−gᵀJJᵀg / gᵀM_rg÷gᵀJJᵀg
+    gw14seeds = max(3, int(P.get("gw14seeds", 24)))   # ★grok-⑭ # random seeds (scatter points) per σ
+    gw14steps = max(1, int(P.get("gw14steps", 2000))) # ★grok-⑭ GD iterations per seed run
     gwdiaginit = float(P.get("gwdiaginit", 1.0))                     # 1 ⇒ grok runs use the MAIN run's init (default; tie to main run)
     gw_n = max(3, int(P.get("gw_n", 6)))         # shared: # of sweep points (⑤⑥⑦)
     gw_steps = max(600, int(P.get("gw_steps", 600)))   # ★ ALL grok/Panel-0 runs train ≥600 iterations, always   # shared: # GD steps per short run
@@ -5321,7 +5411,7 @@ def run_stream(P):
     gw4h_refs = {}                          # ★grok-④ (H version): same, but for the UNWEIGHTED function Hessian H=Σ_i Q_i
     gwdiag_th = None                        # ★grok-②③④: small-init SHADOW trajectory (gwdiaginit·θ₀, plain GD) the diagnostics analyze (gwdiaginit=1 ⇒ main run)
     gw1_done = False                        # ★grok-①: one-shot init-scale sweep guard
-    gw5_done = gw6_done = gw7_done = gw8_done = gw9_done = gw10_done = gw11_done = gw3p0_done = False   # ★grok-⑤⑥⑦⑧⑨⑩⑪ + ③Panel-0: completion guards
+    gw5_done = gw6_done = gw7_done = gw8_done = gw9_done = gw10_done = gw11_done = gw12_done = gw13_done = gw14_done = gw3p0_done = False   # ★grok-⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭ + ③Panel-0: completion guards
     gw5_started = gw6_started = gw7_started = gw9_started = gw10_started = gw3p0_started = False   # ★concurrency: streaming groks are SET UP once (guard) then advanced one tick per main diagnostic tick — main + groks train SIMULTANEOUSLY (fine-interleave, single GPU, lockstep)
     _gw_drivers = {}                         # ★concurrency: which -> (_stream_runs generator, finalize_fn). Advanced ONE tick per main diagnostic tick; on completion emits a terminal "gwfinal" record (kept by the offline capture, unlike the transient "gwstream" partials)
     eds_hist = []              # EARLY-DYNAMICS (s42): rolling buffer of the last ~11 ticks' {t, h, mr} top-K eigenspaces, for the mean principal angle at lags {1,2,5,10}
@@ -6115,7 +6205,7 @@ def run_stream(P):
             #   test/train loss+acc (grokking), ratio |gᵀM_rg|/|gᵀJJᵀg|, PS λ_max(∇²L), J↔r alignment.
             _grokable = (dataset != "owt")   # interventions gw5/6/7/9 are model-agnostic (own data + generic gradL/hvpS/jac_cols); gw8 (activation swap) additionally needs an MLP — gated below
             Xtr_g = Ytr_g = Xte_g = Yte_g = None; Ntr_g = Nte_g = 0
-            if (gw5 or gw6 or gw7 or gw8 or gw9 or gw10 or gw11) and _grokable and (not (gw5_done and gw6_done and gw7_done and gw8_done and gw9_done and gw10_done and gw11_done)):
+            if (gw5 or gw6 or gw7 or gw8 or gw9 or gw10 or gw11 or gw12 or gw13 or gw14) and _grokable and (not (gw5_done and gw6_done and gw7_done and gw8_done and gw9_done and gw10_done and gw11_done and gw12_done and gw13_done and gw14_done)):
                 try:
                     # grok-⑤–⑩ build their OWN larger TRAIN (gw_nsamp) + held-out TEST set. _heldout_testset GUARANTEES
                     # the test is disjoint from THIS train (gw_nsamp) with the same DGP (chebyshev→train-grid midpoints,
@@ -6126,7 +6216,7 @@ def run_stream(P):
                     Nte_g = int(Xte_g.shape[0]) if Xte_g is not None else 0
                 except Exception:
                     Xtr_g = Ytr_g = Xte_g = Yte_g = None; Ntr_g = Nte_g = 0
-            if (gw5 or gw6 or gw7 or gw8 or gw9 or gw10) and Xtr_g is None:
+            if (gw5 or gw6 or gw7 or gw8 or gw9 or gw10 or gw12 or gw13 or gw14) and Xtr_g is None:
                 _grokable = False   # data build failed ⇒ skip the interventions this run
             if gw8 and not isinstance(_TL.model, MlpModel):
                 gw8_done = True     # activation-swap is MLP-only ⇒ mark done so the data-rebuild guard resolves
@@ -6371,6 +6461,78 @@ def run_stream(P):
                     g_gw11 = None; gw11_done = True
                 finally:
                     _TL.loss = saved_loss                                        # ALWAYS restore the real loss
+
+            g_gw12 = None                                                        # ⑫ GD vs SGD: minibatch-size sweep (statistics ALWAYS full-batch) + Panel-4 M_r-eigvec↔Jᵀr alignment
+            if gw12 and not gw12_done and _grokable and (not _gw_fired or (t + ee > steps)):
+                try:
+                    th0g = (gw12init * _th_init0).detach().clone()               # same init θ for every batch size (only the batch size changes)
+                    _bslist = [b for b in (1, 2, 4, 8, 16, 32, 64, 128, 256, 512) if b < Ntr_g] + [0]   # BS < full train size, then 0 = FULL-batch GD (batch≥N ⇒ full)
+                    runs = []
+                    for _bs in _bslist:                                           # red (BS=1) → blue (full) gradient assigned client-side by run order
+                        _nm = "full-batch GD" if _bs == 0 else ("BS=%d" % _bs)
+                        rec = _grok_train(th0g.detach().clone(), Xtr_g, Ytr_g, Xte_g, Yte_g, gw_steps, gw_ev, Ntr_g, Nte_g, outD, ce,
+                                          _gd_step(Xtr_g, Ytr_g, lr), batch=_bs, bseed=int(P["seed"]),
+                                          mk_step=(lambda Xb, Yb, Nb: _gd_step(Xb, Yb, lr)), mr_pairs=True)   # minibatch UPDATE, FULL-batch diagnostics (built into _grok_train)
+                        runs.append({"x": (Ntr_g if _bs == 0 else _bs), "name": _nm, **rec})
+                        yield {"type": "gwstream", "which": "gw12", "payload": {"t": t, "axis": "batch size", "sigma": gw12init, "runs": list(runs)}}
+                    g_gw12 = {"t": t, "axis": "batch size", "sigma": gw12init, "runs": runs}; gw12_done = True; _gw_fired = True
+                except Exception:
+                    g_gw12 = None; gw12_done = True
+
+            g_gw13 = None                                                        # ⑬ MOMENTUM × BATCH-SIZE grid: heavy-ball GD, sweep μ at batch ∈ {full, full//2, full//4, full//8}; same 4 panels as ⑫ (statistics always full-batch); client dropdown picks the batch size
+            if gw13 and not gw13_done and _grokable and (not _gw_fired or (t + ee > steps)):
+                try:
+                    th0g = (gw13init * _th_init0).detach().clone()               # same init θ for every (batch, μ) run
+                    _moms = (0.0, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99, 1.0)   # red (μ=0) → blue (μ=1) client-side
+                    _bs_settings = []                                            # (batch_value, label) — full then full//2, //4, //8 (deduped, ≥1)
+                    for _b in (Ntr_g, Ntr_g // 2, Ntr_g // 4, Ntr_g // 8):
+                        _bv = max(1, int(_b))
+                        if _bv not in [s[0] for s in _bs_settings]:
+                            _bs_settings.append((_bv, "full-batch" if _bv == Ntr_g else ("BS=%d" % _bv)))
+                    _bslist = [s[0] for s in _bs_settings]
+                    bybs = {}
+                    for _bv, _bnm in _bs_settings:
+                        _barg = 0 if _bv == Ntr_g else _bv                       # 0 = full-batch (no minibatch); else minibatch UPDATE, full-batch diagnostics
+                        _rbs = []
+                        for _mu in _moms:
+                            _st = {"v": None}                                    # SHARED velocity buffer → momentum persists across the per-minibatch step rebuilds
+                            if _barg == 0:
+                                _sf = _mom_step(Xtr_g, Ytr_g, lr, _mu, _st); _mkf = None
+                            else:
+                                _sf = _gd_step(Xtr_g, Ytr_g, lr)                 # placeholder (NOT used under minibatch — mk_step drives the update)
+                                _mkf = (lambda Xb, Yb, Nb, _m=_mu, _s=_st: _mom_step(Xb, Yb, lr, _m, _s))
+                            rec = _grok_train(th0g.detach().clone(), Xtr_g, Ytr_g, Xte_g, Yte_g, gw_steps, gw_ev, Ntr_g, Nte_g, outD, ce,
+                                              _sf, batch=_barg, bseed=int(P["seed"]), mk_step=_mkf, mr_pairs=True)
+                            _rbs.append({"x": _mu, "name": ("μ=%g" % _mu), **rec})
+                            bybs[str(_bv)] = {"runs": list(_rbs)}
+                            yield {"type": "gwstream", "which": "gw13", "payload": {"t": t, "axis": "momentum μ", "sigma": gw13init, "bslist": _bslist, "bybs": dict(bybs)}}
+                    g_gw13 = {"t": t, "axis": "momentum μ", "sigma": gw13init, "bslist": _bslist, "bybs": bybs}; gw13_done = True; _gw_fired = True
+                except Exception:
+                    g_gw13 = None; gw13_done = True
+
+            g_gw14 = None                                                        # ⑭ generalization-gap ↔ init-curvature correlation: per σ, gw14seeds iid-N(0,σ) inits, each trained gw14steps iters; scatter y=Σ(L_test−L_train) vs x=gᵀM_rg−gᵀJJᵀg (and ÷)
+            if gw14 and not gw14_done and _grokable and (not _gw_fired or (t + ee > steps)):
+                try:
+                    _pp = _TL.model.p
+                    _sigmas = (0.05, 0.15, 0.4, 0.8, 1.6, 3.0)                   # very small → quite large (log-ish), moderate in between
+                    bysig = {}
+                    for _si, _sg in enumerate(_sigmas):
+                        _pts = []
+                        for _sd in range(gw14seeds):
+                            _gen = torch.Generator(device=_dev()); _gen.manual_seed((int(P["seed"]) * 100003 + _si * 1315423911 + _sd * 2654435761) & 0x7FFFFFFF)
+                            _th0 = torch.randn(_pp, generator=_gen, dtype=DTYPE, device=_dev()) * _sg   # iid N(0,σ) init (mean 0, std σ), data FIXED (grok train/test set) ⇒ the seed varies only the init
+                            try:
+                                _gM, _gJ = _gw14_initstats(_th0, Xtr_g, Ytr_g, Ntr_g, outD)
+                                _xd = _gM - _gJ; _xr = (_gM / _gJ) if abs(_gJ) > 1e-30 else None
+                                _y = _gw14_run(_th0, Xtr_g, Ytr_g, Xte_g, Yte_g, Ntr_g, Nte_g, gw14steps, lr)
+                                _pts.append({"xd": _xd, "xr": _xr, "y": _y})
+                            except Exception:
+                                pass
+                            bysig[str(_si)] = {"sigma": _sg, "points": list(_pts)}
+                            yield {"type": "gwstream", "which": "gw14", "payload": {"t": t, "sigmas": list(_sigmas), "steps": gw14steps, "bysigma": dict(bysig)}}
+                    g_gw14 = {"t": t, "sigmas": list(_sigmas), "steps": gw14steps, "bysigma": bysig}; gw14_done = True; _gw_fired = True
+                except Exception:
+                    g_gw14 = None; gw14_done = True
 
             g_gw3p0 = None                                                        # ★grok-③ Panel-0: 5 quadratic-surrogate trainings (true / evolving-re-expand / fixed-init / random / low-rank Q)
             if gw3 and not gw3p0_started and (N * outD) <= grid3dcap and dataset != "owt" and Jc is not None and (not _gw_fired or (t + ee > steps)):
@@ -7537,6 +7699,9 @@ def run_stream(P):
                 "g_gw9": g_gw9,                                # ★grok-⑨ random-search-on-M_r-subspace vs GD baseline (2 named runs)
                 "g_gw10": g_gw10,                             # ★grok-⑩ subspace-traversal random-search on Qr (top/bottom/null/random-K) × k∈{1,3,5}
                 "g_gw11": g_gw11,                             # ★grok-⑪ loss-function sweep (log-cosh/erf/pseudo-Huber/e^{r²}/MSE/CE) — 3 panels, loss-consistent ratio, rich/lazy colour-coded
+                "g_gw12": g_gw12,                             # ★grok-⑫ GD vs SGD batch-size sweep — 4 panels (3 shared + Panel-4 M_r-eigvec↔Jᵀr), full-batch statistics, red→blue
+                "g_gw13": g_gw13,                             # ★grok-⑬ momentum sweep (full-batch heavy-ball) — same 4 panels, red→blue
+                "g_gw14": g_gw14,                             # ★grok-⑭ generalization-gap ↔ init-curvature scatter (6 σ × seeds; y=Σ(L_test−L_train), x=init gᵀM_rg−gᵀJJᵀg / ÷)
                 "g_gw3p0": g_gw3p0,                           # ★grok-③ Panel-0: 5 quadratic-surrogate trainings (true/evolving/fixed/random/low-rank Q)
                 "g27": g27,                                    # §27: sliding-window 3D subspace projection of the six ∇θ gradient-vectors (50-step lag)
                 "g27x": g27x,                                  # §7 extra panel: per-step cosine similarities + norms of {∇‖g‖², g, ∇‖J‖², J·ṙ, J̇·r, ∇‖J̇‖²}
@@ -8271,6 +8436,9 @@ def _parse_params(q):
         "gw10": g("gw10", "0") == "1",   # ★grok-⑩ subspace-traversal random-search on Qr (top/bottom/null/random-K), step maximizes rᵀf (no gradient), k∈{1,3,5}
         "gw10try": int(g("gw10try", "16")), "gw10init": float(g("gw10init", "1.0")),
         "gw11": g("gw11", "0") == "1", "gw11init": float(g("gw11init", "1.0")),   # ★grok-⑪ loss-function sweep
+        "gw12": g("gw12", "0") == "1", "gw12init": float(g("gw12init", "1.0")),   # ★grok-⑫ GD vs SGD batch-size sweep
+        "gw13": g("gw13", "0") == "1", "gw13init": float(g("gw13init", "1.0")),   # ★grok-⑬ momentum sweep
+        "gw14": g("gw14", "0") == "1", "gw14seeds": int(g("gw14seeds", "24")), "gw14steps": int(g("gw14steps", "2000")),   # ★grok-⑭ gen-gap ↔ init-curvature correlation
 
         "gw6init": float(g("gw6init", "1.0")), "gw7init": float(g("gw7init", "1.0")), "gw8init": float(g("gw8init", "1.0")), "gw9init": float(g("gw9init", "1.0")), "gwdiaginit": float(g("gwdiaginit", "1.0")),   # ★grok init-scale controls default 1 = MAIN run's init (tied to main run)
         "gw_n": int(g("gw_n", "6")), "gw_steps": int(g("gw_steps", "600")),  # shared: # sweep points, # GD steps/run
