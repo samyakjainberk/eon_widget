@@ -4689,7 +4689,7 @@ function _gw2enforceMono(){
   }
 }
 function pushPoint(t,D,n,kth,nResid){
-  if((++_plotCall % _plotStride)!==0) return;   // decimation: plot only every _plotStride-th tick (full range, bounded points)
+  if((++_plotCall % _plotStride)!==0 && !(D.g_gw1||D.g_gw5||D.g_gw6||D.g_gw7||D.g_gw8||D.g_gw9||D.g_gw10||D.g_gw11||D.g_gw12||D.g_gw13||D.g_gw14||D.g_gw3p0)) return;   // decimation: plot only every _plotStride-th tick — EXCEPT never skip a record carrying a ONE-SHOT grok payload (g_gwN ride a single tick; if that tick is decimated on load, the grok panel would never render)
   clearNAonData(D);
   if(OPT.s1){
     extP('p_loss',{x:[[t]],y:[[D.loss]]},[0]);
@@ -6256,6 +6256,11 @@ function applyCaptureParams(params){
   {const e=document.getElementById('enS6f');if(e&&('s6f' in params)){e.checked=(String(params.s6f)==='1');toggleS6f();}}   // §6 fixed-basis toggle — restore + reveal from a loaded capture
   {const e=document.getElementById('s6fk');if(e&&('s6fk' in params))e.value=String(params.s6fk);}
   {const e30=document.getElementById('en30'),e31=document.getElementById('en31');if(e30&&e31&&e30.checked&&e31.checked)e31.checked=false;}   // .checked= doesn't fire the en30/en31 mux; enforce it here (frozen-Q wins, matching the server) so a both-set capture doesn't force-show an empty sec_s23
+  // ★ restore the §4-SLQ + prediction toggles that currentQueryParams reads from their OWN ids (not SEC_TOGGLE_MAP),
+  //   so a loaded capture matches EXACTLY. enSlq defaults CHECKED, so without this a capture with SLQ off (s5=0)
+  //   would wrongly show an empty SLQ panel. syncSectionVis() below then applies the correct show/hide.
+  {const R=[['enSlq','s5'],['enP3','s36'],['enP4','s37'],['enPt','s38'],['enPd','s12'],['enPR','s41']];
+   for(const [id,k] of R){const e=document.getElementById(id); if(e&&(k in params))e.checked=(String(params[k])==='1');}}
   const pe=document.getElementById('preset');if(pe)pe.value='custom';
   if(typeof syncLossPanels==='function')syncLossPanels();
   if(typeof syncSectionVis==='function')syncSectionVis();
